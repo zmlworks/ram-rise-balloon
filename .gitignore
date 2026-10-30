@@ -1,0 +1,13 @@
+# build outputs
+*.exe
+*.o
+*.res
+*.res.o
+*.zip
+out/
+# settings created next to the exe
+RamRiseBalloon.ini
+# misc
+.DS_Store
+Thumbs.db
+.env
