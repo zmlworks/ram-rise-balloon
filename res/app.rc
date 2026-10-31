@@ -5,8 +5,8 @@
 CREATEPROCESS_MANIFEST_RESOURCE_ID RT_MANIFEST "app.manifest"
 
 VS_VERSION_INFO VERSIONINFO
-FILEVERSION 0,2,0,0
-PRODUCTVERSION 0,2,0,0
+FILEVERSION 0,2,1,0
+PRODUCTVERSION 0,2,1,0
 FILEOS VOS_NT_WINDOWS32
 FILETYPE VFT_APP
 BEGIN
@@ -15,9 +15,9 @@ BEGIN
     BLOCK "041104B0"
     BEGIN
       VALUE "FileDescription", "RamRiseBalloon - RAM usage balloon while memory is rising"
-      VALUE "FileVersion", "0.2.0.0"
+      VALUE "FileVersion", "0.2.1.0"
       VALUE "ProductName", "RamRiseBalloon"
-      VALUE "ProductVersion", "0.2.0.0"
+      VALUE "ProductVersion", "0.2.1.0"
       VALUE "OriginalFilename", "RamRiseBalloon.exe"
       VALUE "InternalName", "RamRiseBalloon"
       VALUE "LegalCopyright", "Copyright (c) 2026 zmlworks (MIT License)"

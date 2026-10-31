@@ -1,5 +1,5 @@
 /*
- * RamRiseBalloon (ram-rise-balloon) v0.2.0
+ * RamRiseBalloon (ram-rise-balloon) v0.2.1
  * RAM 使用量が増えている間だけ、画面右下に使用量のバルーンを出す常駐アプリ (Windows 10/11 x64)。
  * メモリ圧縮 (Memory Compression) の量も監視し、圧縮が増えているときもバルーンを出す。
  *
@@ -21,7 +21,7 @@
 
 #define APP_NAME     L"RamRiseBalloon"
 #define APP_TITLE    L"RAM 上昇バルーン"
-#define APP_VER      L"0.2.0"
+#define APP_VER      L"0.2.1"
 #define INI_NAME     L"RamRiseBalloon.ini"
 #define MUTEX_NAME   L"Local\\zmlworks.RamRiseBalloon"
 #define RUN_KEY      L"Software\\Microsoft\\Windows\\CurrentVersion\\Run"
@@ -354,7 +354,11 @@ static void TakeSample(Sample *s, ProcSnap *snap)
     if (gDemo) {
         /* 40 サンプル周期: 5 秒平ら → 15 秒上昇 (約 +150 MB/s) → 20 秒平ら/少し減る */
         int t = gDemoT % 40, rise = t < 5 ? 0 : t < 20 ? t - 5 : 15, crise;
-        double jitter = (double)((gDemoT * 7919) % 13 - 6) * MB;
+        static const int kWobble[7] = {0, -40, 35, -10, 60, -25, 15};   /* 1 秒ごとの増減がばらつくように */
+        double jitter = (double)kWobble[gDemoT % 7] * MB;
+#ifdef DEMO_SPIKE
+        if (t >= 12) jitter += 1300.0 * MB;
+#endif
         s->total = 32.0 * GB;
         s->used = 12.0 * GB + rise * 150.0 * MB + (t >= 20 ? -(t - 20) * 4.0 * MB : 0) + jitter;
         s->commit = 18.0 * GB + rise * 160.0 * MB;
@@ -585,6 +589,17 @@ static void FmtDelta(wchar_t *b, int cap, double bytes)
     b[cap - 1] = 0;
 }
 
+/* 1 サンプルの増減 (2 行目の 1 列分): MB の整数 (単位は行末にまとめて表示)。|d| >= 1024 MB は「+1.25G」 */
+#define STEP_COLS 5
+static void FmtStep(wchar_t *b, int cap, double bytes)
+{
+    double a = fabs(bytes);
+    if (a < 0.5 * MB) _snwprintf(b, (size_t)cap, L"0");
+    else if (a >= 1024.0 * MB) _snwprintf(b, (size_t)cap, L"%ls%.2fG", bytes < 0 ? L"-" : L"+", a / GB);
+    else _snwprintf(b, (size_t)cap, L"%ls%.0f", bytes < 0 ? L"-" : L"+", a / MB);
+    b[cap - 1] = 0;
+}
+
 static void RenderBalloon(void)
 {
     HMONITOR mon = TargetMonitor();
@@ -593,11 +608,10 @@ static void RenderBalloon(void)
     const Sample *s = HistAgo(0);
     int S = (int)dpi, pad = MulDiv(14, S, 96), lh = MulDiv(20, S, 96);
     int bigH = MulDiv(32, S, 96), dH = MulDiv(22, S, 96), barH = MulDiv(6, S, 96);
-    int w = MulDiv(330, S, 96), lines = 2, h, y, x, iw, span;
+    int w = MulDiv(330, S, 96), lines = 2, h, y, x, iw;
     int showTop = gS.showTopProcess && gTopDelta > 0 && gTopName[0];
     int up = gRamRise;   /* 「▲ + 使用量」をオレンジにするのは RAM が増加中のときだけ */
     double pct = s->total > 0 ? s->used * 100.0 / s->total : 0;
-    double d1 = 0.5 * MB;
     wchar_t b1[64], b2[64], b3[64], line[200];
     BITMAPINFO bi;
     COLORREF barC;
@@ -638,13 +652,35 @@ static void RenderBalloon(void)
     Text(gMemDC, gFBig, C_TEXT, pad, y, iw, bigH, DT_RIGHT | DT_VCENTER, b2);
     y += bigH;
 
-    /* 2 行目: 過去 WindowSec 秒の増減 (プラスはオレンジ、マイナス・0 は通常色) */
-    span = gHistCount - 1 < gWinSamples ? gHistCount - 1 : gWinSamples;
-    FmtDelta(b1, 64, span > 0 ? gDeltaUsed : 0);
-    Text(gMemDC, gFHead, (span > 0 && gDeltaUsed >= d1) ? C_RISE : C_TEXT, pad, y, iw, dH, DT_LEFT | DT_VCENTER, b1);
-    x = pad + TextW(gMemDC, gFHead, b1);
-    _snwprintf(line, 200, L"　過去 %d 秒", (span > 0 ? span : 0) * gS.sampleMs / 1000); line[199] = 0;
-    Text(gMemDC, gFSmall, C_DIM, x, y, iw - (x - pad), dH, DT_LEFT | DT_VCENTER, line);
+    /* 2 行目: 直近 5 回のサンプル (SampleMs ごと) の増減を古い順に左から。各列は右寄せの等幅カラム。
+       プラスはオレンジ、マイナス・0 は通常色。まだ無い分は「–」 */
+    {
+        int k, cw, unitW = TextW(gMemDC, gFSmall, L"MB"), gap = MulDiv(6, S, 96);
+        int avail = iw - (gDemo ? TextW(gMemDC, gFSmall, L"デモ") + gap * 2 : 0);
+        cw = (avail - unitW - gap) / STEP_COLS;
+        for (k = STEP_COLS - 1; k >= 0; k--) {
+            int col = STEP_COLS - 1 - k;
+            COLORREF c = C_DIM;
+            if (gHistCount > k + 1) {
+                double d = HistAgo(k)->used - HistAgo(k + 1)->used;
+                FmtStep(b1, 64, d);
+                c = d >= 0.5 * MB ? C_RISE : C_TEXT;
+            } else {
+                wcscpy(b1, L"–");
+            }
+            {   /* 列に収まらない (GB 表示など) ときは小さいフォント、それでも無理なら小数 1 桁に */
+                HFONT f = gFHead;
+                int room = cw - MulDiv(4, S, 96);
+                if (TextW(gMemDC, f, b1) > room) f = gFSmall;
+                if (TextW(gMemDC, f, b1) > room && gHistCount > k + 1) {
+                    double d = HistAgo(k)->used - HistAgo(k + 1)->used;
+                    _snwprintf(b1, 64, L"%ls%.1fG", d < 0 ? L"-" : L"+", fabs(d) / GB); b1[63] = 0;
+                }
+                Text(gMemDC, f, c, pad + col * cw, y, cw, dH, DT_RIGHT | DT_VCENTER, b1);
+            }
+        }
+        Text(gMemDC, gFSmall, C_DIM, pad + STEP_COLS * cw + gap, y, unitW + gap, dH, DT_LEFT | DT_VCENTER, L"MB");
+    }
     if (gDemo) Text(gMemDC, gFSmall, C_DIM, pad, y, iw, dH, DT_RIGHT | DT_VCENTER, L"デモ");
     y += dH + MulDiv(6, S, 96);
 
@@ -943,7 +979,7 @@ static int Dump(const wchar_t *path)
     FILE *f = _wfopen(path, L"wb");
     int i;
     if (!f) return 2;
-    fprintf(f, "RamRiseBalloon 0.2.0 --dump\r\n");
+    fprintf(f, "RamRiseBalloon 0.2.1 --dump\r\n");
     for (i = 0; i < 3; i++) {
         Sample s;
         ProcSnap snap = {0, 0, 0};

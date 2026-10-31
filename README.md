@@ -1,4 +1,4 @@
-# RamRiseBalloon (ram-rise-balloon) v0.2.0
+# RamRiseBalloon (ram-rise-balloon) v0.2.1
 
 > **このアカウントについて / About this account**
 > このリポジトリは、AIアシスタントGrok Botが人間の管理者のもとで自律的に運用しているアカウント（zmlworks）が作成・管理しています。コード・説明文は AI が作成しました。
@@ -35,12 +35,12 @@ Windows の **メモリ圧縮** の量も監視し、圧縮が増えていると
 
 ### バルーンの内容
 
-見出しはありません。いちばん上が使用量、そのすぐ下が過去 5 秒の増減です。
+見出しはありません。いちばん上が使用量、そのすぐ下が直近 5 回（1 秒ごと）の増減です。
 
 | 行 | 内容 |
 |---|---|
 | 使用量（大） | `▲13.3 / 32.0 GB` と使用率 %。**RAM が増加中のときだけ** 先頭に `▲` が付き、`▲13.3` の部分がオレンジになります（` / 32.0 GB` は通常の色）。増加が止まった後の表示中（`HoldSec`）や、圧縮の増加だけで出ているときは `▲` なし・通常の色です |
-| 増減 | 過去 `WindowSec` 秒（既定 5 秒）の使用量の増減。`+412 MB` / `-85 MB`（±1024 MB 以上は `+1.25 GB` のように GB で小数 2 桁）。**プラスはオレンジ**、マイナスと `±0 MB` は通常の色 |
+| 増減（5 列） | 1 秒ごと（`SampleMs` ごと）のサンプルの増減を直近 5 回分、**左が古く右が新しい** 順に並べます。例: `+120  +85  -12  +300  +254 MB`（単位 MB は行末にまとめて表示。±1024 MB 以上は `+1.25G`）。各値は等幅の列に右寄せなので数字がずれません。**プラスはオレンジ**、マイナスと `0` は通常の色。起動直後などでまだ無い分は `–` |
 | バー | 使用率（75% で橙、90% で赤） |
 | 圧縮 | 圧縮ストアの物理メモリ量（取得できれば「元 約 X GB」= 圧縮前のデータ量の推定）。圧縮が増加中は行が黄色。右端は窓の間の増減で、プラスはオレンジ（増加中は `▲` 付き）。取得できなければ `n/a` |
 | コミット | コミット済み / コミット上限 |
@@ -99,23 +99,26 @@ exe と同じフォルダーに作ります（書き込めない場所なら `%A
 
     sudo apt install gcc-mingw-w64-x86-64 binutils-mingw-w64-x86-64 zip   # zip が無ければ python3 で作ります
     ./build.sh          # → RamRiseBalloon.exe
-    ./build.sh zip      # → ../out/ram-rise-balloon-v0.2.0-win64.zip
+    ./build.sh zip      # → ../out/ram-rise-balloon-v0.2.1-win64.zip
 
 `-Wall -Wextra` で警告ゼロ。アイコンは `res/make_icon.py`（Pillow）で生成した `res/app.ico` を埋め込んでいます。
 
 ## ファイル
 
-- `ramrise.c` 本体 / `res/app.rc` リソース（アイコン・マニフェスト・バージョン 0.2.0）/ `res/app.manifest` / `res/make_icon.py`
+- `ramrise.c` 本体 / `res/app.rc` リソース（アイコン・マニフェスト・バージョン 0.2.1）/ `res/app.manifest` / `res/make_icon.py`
 - `docs/` Wine で撮ったスクリーンショット（`--demo` モード。数値はダミー）
 
 ## 補足
 
-- `--demo` を付けて起動すると、ダミーの上昇カーブ（RAM と圧縮）でバルーンの動きを確認できます（バルーンの増減の行の右端に「デモ」と出ます）
+- `--demo` を付けて起動すると、ダミーの上昇カーブ（RAM と圧縮）でバルーンの動きを確認できます（バルーンの 2 行目の右端に「デモ」と出ます）
 - 起動は 1 つだけ（2 つ目は案内を出して終了）。終了すると通知領域のアイコンも消えます。Explorer が再起動してもアイコンを出し直します
 - CPU 負荷: 1 秒に 1 回メモリ情報とプロセス一覧を読むだけです
 
 ## 変更履歴
 
+- **0.2.1** (2026-11-01)
+  - 2 行目を「過去 5 秒の合計」から、**1 秒ごとの増減 5 回分**（左が古い → 右が新しい、各列右寄せ、単位 MB は行末）に変更。プラスはオレンジ
+  - `--demo` のダミー値が 1 秒ごとに少しばらつくようにした（増減の表示確認用）
 - **0.2.0** (2026-11-01)
   - 見出し（「▲ RAM 使用量が増加中」など）をなくした
   - 大きな数字を `▲13.3 / 32.0 GB` の形に。RAM 増加中は `▲` + 使用量をオレンジで表示（増加中でなければ `▲` なし・通常の色）
@@ -128,7 +131,7 @@ exe と同じフォルダーに作ります（書き込めない場所なら `%A
 
 RamRiseBalloon shows a small dark, non-activating, topmost balloon at the bottom-right (above the taskbar) **only while RAM usage is rising**
 (used memory grew by ≥ `RiseMB` over the last `WindowSec` seconds), and also when the Windows memory-compression store grows
-(≥ `CompRiseMB`), since compression can hide RAM growth. It shows `▲used / total GB` and % (the `▲used` part in orange only while RAM is rising), the signed change over the last `WindowSec` seconds right below it (plus = orange), the compressed amount,
+(≥ `CompRiseMB`), since compression can hide RAM growth. It shows `▲used / total GB` and % (the `▲used` part in orange only while RAM is rising), the last 5 per-sample (1 s) signed changes right below it, oldest left to newest right (plus = orange), the compressed amount,
 commit charge and the process that grew most. Compression is read via `NtQuerySystemInformation(SystemStoreInformation)` when elevated,
 otherwise from the working set of the "Memory Compression" process in the process list (no admin, no process handle). Tray menu: pause,
 open INI, start with Windows (HKCU Run), exit. Settings live in `RamRiseBalloon.ini` next to the exe (fallback `%APPDATA%`).
