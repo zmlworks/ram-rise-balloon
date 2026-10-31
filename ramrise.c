@@ -1,5 +1,5 @@
 /*
- * RamRiseBalloon (ram-rise-balloon) v0.2.1
+ * RamRiseBalloon (ram-rise-balloon) v0.2.2
  * RAM 使用量が増えている間だけ、画面右下に使用量のバルーンを出す常駐アプリ (Windows 10/11 x64)。
  * メモリ圧縮 (Memory Compression) の量も監視し、圧縮が増えているときもバルーンを出す。
  *
@@ -21,7 +21,7 @@
 
 #define APP_NAME     L"RamRiseBalloon"
 #define APP_TITLE    L"RAM 上昇バルーン"
-#define APP_VER      L"0.2.1"
+#define APP_VER      L"0.2.2"
 #define INI_NAME     L"RamRiseBalloon.ini"
 #define MUTEX_NAME   L"Local\\zmlworks.RamRiseBalloon"
 #define RUN_KEY      L"Software\\Microsoft\\Windows\\CurrentVersion\\Run"
@@ -608,7 +608,7 @@ static void RenderBalloon(void)
     const Sample *s = HistAgo(0);
     int S = (int)dpi, pad = MulDiv(14, S, 96), lh = MulDiv(20, S, 96);
     int bigH = MulDiv(32, S, 96), dH = MulDiv(22, S, 96), barH = MulDiv(6, S, 96);
-    int w = MulDiv(330, S, 96), lines = 2, h, y, x, iw;
+    int w = MulDiv(330, S, 96), lines = 2, h, y, x, iw, slotW;
     int showTop = gS.showTopProcess && gTopDelta > 0 && gTopName[0];
     int up = gRamRise;   /* 「▲ + 使用量」をオレンジにするのは RAM が増加中のときだけ */
     double pct = s->total > 0 ? s->used * 100.0 / s->total : 0;
@@ -652,14 +652,15 @@ static void RenderBalloon(void)
     Text(gMemDC, gFBig, C_TEXT, pad, y, iw, bigH, DT_RIGHT | DT_VCENTER, b2);
     y += bigH;
 
-    /* 2 行目: 直近 5 回のサンプル (SampleMs ごと) の増減を古い順に左から。各列は右寄せの等幅カラム。
-       プラスはオレンジ、マイナス・0 は通常色。まだ無い分は「–」 */
+    /* 2 行目: 直近 5 回のサンプル (SampleMs ごと) の増減。いちばん新しい値が左端に入り、古い値は毎回右へ流れる
+       (右端の最も古い値が押し出される)。各列は等幅で左寄せ (1 列目の左端 = 1 行目の▲・圧縮の増減の左端)。
+       プラスはオレンジ、マイナス・0 は通常色。まだ無い分は「–」(右側に出る) */
     {
         int k, cw, unitW = TextW(gMemDC, gFSmall, L"MB"), gap = MulDiv(6, S, 96);
         int avail = iw - (gDemo ? TextW(gMemDC, gFSmall, L"デモ") + gap * 2 : 0);
         cw = (avail - unitW - gap) / STEP_COLS;
         for (k = STEP_COLS - 1; k >= 0; k--) {
-            int col = STEP_COLS - 1 - k;
+            int col = k;   /* k = 0 (最新) が左端 */
             COLORREF c = C_DIM;
             if (gHistCount > k + 1) {
                 double d = HistAgo(k)->used - HistAgo(k + 1)->used;
@@ -676,7 +677,7 @@ static void RenderBalloon(void)
                     double d = HistAgo(k)->used - HistAgo(k + 1)->used;
                     _snwprintf(b1, 64, L"%ls%.1fG", d < 0 ? L"-" : L"+", fabs(d) / GB); b1[63] = 0;
                 }
-                Text(gMemDC, f, c, pad + col * cw, y, cw, dH, DT_RIGHT | DT_VCENTER, b1);
+                Text(gMemDC, f, c, pad + col * cw, y, cw, dH, DT_LEFT | DT_VCENTER, b1);
             }
         }
         Text(gMemDC, gFSmall, C_DIM, pad + STEP_COLS * cw + gap, y, unitW + gap, dH, DT_LEFT | DT_VCENTER, L"MB");
@@ -690,33 +691,43 @@ static void RenderBalloon(void)
     Fill(gMemDC, pad, y, (int)(iw * (pct > 100 ? 100 : pct) / 100.0 + 0.5), barH, barC);
     y += barH + MulDiv(10, S, 96);
 
-    /* 圧縮 (圧縮が増加中なら行を黄色に。右端の増減はプラスならオレンジ) */
+    /* 情報行: 左端に固定幅の枠 (増減)、その右に本文。枠の左端は 1 行目の▲・2 行目の 1 列目と同じ */
+    slotW = TextW(gMemDC, gFSmall, L"▲888 MB");
+    if (TextW(gMemDC, gFSmall, L"-8.88 GB") > slotW) slotW = TextW(gMemDC, gFSmall, L"-8.88 GB");
+    slotW += MulDiv(10, S, 96);
+
+    /* 圧縮: 左端に窓の間の増減 (増加中は「▲70 MB」、それ以外のプラスは「+70 MB」でオレンジ、マイナス・0 は灰色)。
+       圧縮が増加中なら本文を黄色に */
     if (s->compOk) {
+        if (fabs(gDeltaComp) < 1.0 * MB) wcscpy(b1, L"±0 MB");
+        else {
+            FmtDelta(b3, 64, gDeltaComp);
+            if (gCompRise && gDeltaComp > 0) _snwprintf(b1, 64, L"▲%ls", b3 + 1);   /* 「+」の代わりに「▲」 */
+            else _snwprintf(b1, 64, L"%ls", b3);
+            b1[63] = 0;
+        }
+        Text(gMemDC, gFSmall, gDeltaComp >= 1.0 * MB ? C_RISE : C_DIM, pad, y, slotW, lh, DT_LEFT | DT_VCENTER, b1);
         FmtSize(b1, 64, s->comp, 0);
         if (s->compOrig > 0) { FmtSize(b3, 64, s->compOrig, 0); _snwprintf(b2, 64, L"（元 約 %ls）", b3); b2[63] = 0; }
         else b2[0] = 0;
         _snwprintf(line, 200, L"圧縮: %ls%ls", b1, b2); line[199] = 0;
-        Text(gMemDC, gFSmall, gCompRise ? C_COMP : C_TEXT, pad, y, iw - MulDiv(80, S, 96), lh, DT_LEFT | DT_VCENTER, line);
-        if (fabs(gDeltaComp) >= 1.0 * MB) {
-            FmtDelta(b3, 64, gDeltaComp);
-            _snwprintf(b1, 64, L"%ls%ls", gCompRise ? L"▲ " : L"", b3); b1[63] = 0;
-            Text(gMemDC, gFSmall, gDeltaComp > 0 ? C_RISE : C_DIM, pad, y, iw, lh, DT_RIGHT | DT_VCENTER, b1);
-        }
+        Text(gMemDC, gFSmall, gCompRise ? C_COMP : C_TEXT, pad + slotW, y, iw - slotW, lh, DT_LEFT | DT_VCENTER, line);
     } else {
-        Text(gMemDC, gFSmall, C_DIM, pad, y, iw, lh, DT_LEFT | DT_VCENTER, L"圧縮: n/a");
+        Text(gMemDC, gFSmall, C_DIM, pad + slotW, y, iw - slotW, lh, DT_LEFT | DT_VCENTER, L"圧縮: n/a");
     }
     y += lh;
 
-    /* コミット */
+    /* コミット (左の枠は空けて本文の位置をそろえる) */
     _snwprintf(line, 200, L"コミット: %.1f / %.1f GB", s->commit / GB, s->commitLimit / GB); line[199] = 0;
-    Text(gMemDC, gFSmall, C_DIM, pad, y, iw, lh, DT_LEFT | DT_VCENTER, line);
+    Text(gMemDC, gFSmall, C_DIM, pad + slotW, y, iw - slotW, lh, DT_LEFT | DT_VCENTER, line);
     y += lh;
 
+    /* 増加最大: 左の枠に増加量、右にプロセス名 */
     if (showTop) {
         FmtSize(b1, 64, gTopDelta, 1);
+        Text(gMemDC, gFSmall, C_DIM, pad, y, slotW, lh, DT_LEFT | DT_VCENTER, b1);
         _snwprintf(line, 200, L"増加最大: %ls", gTopName); line[199] = 0;
-        Text(gMemDC, gFSmall, C_DIM, pad, y, iw - MulDiv(80, S, 96), lh, DT_LEFT | DT_VCENTER, line);
-        Text(gMemDC, gFSmall, C_DIM, pad, y, iw, lh, DT_RIGHT | DT_VCENTER, b1);
+        Text(gMemDC, gFSmall, C_DIM, pad + slotW, y, iw - slotW, lh, DT_LEFT | DT_VCENTER, line);
     }
 
     GdiFlush();
@@ -979,7 +990,7 @@ static int Dump(const wchar_t *path)
     FILE *f = _wfopen(path, L"wb");
     int i;
     if (!f) return 2;
-    fprintf(f, "RamRiseBalloon 0.2.1 --dump\r\n");
+    fprintf(f, "RamRiseBalloon 0.2.2 --dump\r\n");
     for (i = 0; i < 3; i++) {
         Sample s;
         ProcSnap snap = {0, 0, 0};

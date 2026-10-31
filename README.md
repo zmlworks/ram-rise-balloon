@@ -1,4 +1,4 @@
-# RamRiseBalloon (ram-rise-balloon) v0.2.1
+# RamRiseBalloon (ram-rise-balloon) v0.2.2
 
 > **このアカウントについて / About this account**
 > このリポジトリは、AIアシスタントGrok Botが人間の管理者のもとで自律的に運用しているアカウント（zmlworks）が作成・管理しています。コード・説明文は AI が作成しました。
@@ -40,11 +40,11 @@ Windows の **メモリ圧縮** の量も監視し、圧縮が増えていると
 | 行 | 内容 |
 |---|---|
 | 使用量（大） | `▲13.3 / 32.0 GB` と使用率 %。**RAM が増加中のときだけ** 先頭に `▲` が付き、`▲13.3` の部分がオレンジになります（` / 32.0 GB` は通常の色）。増加が止まった後の表示中（`HoldSec`）や、圧縮の増加だけで出ているときは `▲` なし・通常の色です |
-| 増減（5 列） | 1 秒ごと（`SampleMs` ごと）のサンプルの増減を直近 5 回分、**左が古く右が新しい** 順に並べます。例: `+120  +85  -12  +300  +254 MB`（単位 MB は行末にまとめて表示。±1024 MB 以上は `+1.25G`）。各値は等幅の列に右寄せなので数字がずれません。**プラスはオレンジ**、マイナスと `0` は通常の色。起動直後などでまだ無い分は `–` |
+| 増減（5 列） | 1 秒ごと（`SampleMs` ごと）のサンプルの増減を直近 5 回分。**いちばん新しい値が左端に入り、古い値は毎秒右へ流れます**（右端の最も古い値が押し出される）。例: `+190  +65  +220  +105  +225   MB`（単位 MB は行末にまとめて表示。±1024 MB 以上は `+1.25G`）。各値は等幅の列に左寄せで、1 列目の左端は大きな数字の `▲` と同じ位置。**プラスはオレンジ**、マイナスと `0` は通常の色。起動直後などでまだ無い分は右側に `–` |
 | バー | 使用率（75% で橙、90% で赤） |
-| 圧縮 | 圧縮ストアの物理メモリ量（取得できれば「元 約 X GB」= 圧縮前のデータ量の推定）。圧縮が増加中は行が黄色。右端は窓の間の増減で、プラスはオレンジ（増加中は `▲` 付き）。取得できなければ `n/a` |
-| コミット | コミット済み / コミット上限 |
-| 増加最大 | 窓の間にいちばん増えたプロセス（プライベート ワーキングセット）と増加量 |
+| 圧縮 | **左端**に窓の間（`WindowSec`）の増減を固定幅の枠で表示: 圧縮が増加中は `▲70 MB`、それ以外のプラスは `+70 MB`（どちらもオレンジ）、マイナス・`±0 MB` は灰色。その右に圧縮ストアの物理メモリ量（取得できれば「元 約 X GB」= 圧縮前のデータ量の推定）。圧縮が増加中は本文が黄色。取得できなければ `n/a` |
+| コミット | コミット済み / コミット上限（左の枠は空けて本文の位置をそろえる） |
+| 増加最大 | 左の枠に増加量（例 `+525 MB`）、その右に窓の間にいちばん増えたプロセス（プライベート ワーキングセット） |
 
 ## 「増加中」の判定
 
@@ -99,13 +99,13 @@ exe と同じフォルダーに作ります（書き込めない場所なら `%A
 
     sudo apt install gcc-mingw-w64-x86-64 binutils-mingw-w64-x86-64 zip   # zip が無ければ python3 で作ります
     ./build.sh          # → RamRiseBalloon.exe
-    ./build.sh zip      # → ../out/ram-rise-balloon-v0.2.1-win64.zip
+    ./build.sh zip      # → ../out/ram-rise-balloon-v0.2.2-win64.zip
 
 `-Wall -Wextra` で警告ゼロ。アイコンは `res/make_icon.py`（Pillow）で生成した `res/app.ico` を埋め込んでいます。
 
 ## ファイル
 
-- `ramrise.c` 本体 / `res/app.rc` リソース（アイコン・マニフェスト・バージョン 0.2.1）/ `res/app.manifest` / `res/make_icon.py`
+- `ramrise.c` 本体 / `res/app.rc` リソース（アイコン・マニフェスト・バージョン 0.2.2）/ `res/app.manifest` / `res/make_icon.py`
 - `docs/` Wine で撮ったスクリーンショット（`--demo` モード。数値はダミー）
 
 ## 補足
@@ -116,6 +116,9 @@ exe と同じフォルダーに作ります（書き込めない場所なら `%A
 
 ## 変更履歴
 
+- **0.2.2** (2026-11-01)
+  - 2 行目の 5 個の増減を「左から右へ流れる」向きに: 最新の値が左端に入り、毎秒右へずれる。各列は左寄せ
+  - 圧縮の増減（`▲70 MB` など）を行の左端の固定幅の枠に移動し、1 行目の `▲`・2 行目の 1 列目と左端をそろえた。増加最大の増加量も同じ枠に移動し、コミット行の本文も同じ位置にそろえた
 - **0.2.1** (2026-11-01)
   - 2 行目を「過去 5 秒の合計」から、**1 秒ごとの増減 5 回分**（左が古い → 右が新しい、各列右寄せ、単位 MB は行末）に変更。プラスはオレンジ
   - `--demo` のダミー値が 1 秒ごとに少しばらつくようにした（増減の表示確認用）
@@ -131,7 +134,7 @@ exe と同じフォルダーに作ります（書き込めない場所なら `%A
 
 RamRiseBalloon shows a small dark, non-activating, topmost balloon at the bottom-right (above the taskbar) **only while RAM usage is rising**
 (used memory grew by ≥ `RiseMB` over the last `WindowSec` seconds), and also when the Windows memory-compression store grows
-(≥ `CompRiseMB`), since compression can hide RAM growth. It shows `▲used / total GB` and % (the `▲used` part in orange only while RAM is rising), the last 5 per-sample (1 s) signed changes right below it, oldest left to newest right (plus = orange), the compressed amount,
+(≥ `CompRiseMB`), since compression can hide RAM growth. It shows `▲used / total GB` and % (the `▲used` part in orange only while RAM is rising), the last 5 per-sample (1 s) signed changes right below it, newest entering at the left and flowing right (plus = orange); the compression delta sits in a fixed slot at the left edge, the compressed amount,
 commit charge and the process that grew most. Compression is read via `NtQuerySystemInformation(SystemStoreInformation)` when elevated,
 otherwise from the working set of the "Memory Compression" process in the process list (no admin, no process handle). Tray menu: pause,
 open INI, start with Windows (HKCU Run), exit. Settings live in `RamRiseBalloon.ini` next to the exe (fallback `%APPDATA%`).
