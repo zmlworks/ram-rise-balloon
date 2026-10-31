@@ -1,5 +1,5 @@
 /*
- * RamRiseBalloon (ram-rise-balloon) v0.1.0
+ * RamRiseBalloon (ram-rise-balloon) v0.2.0
  * RAM 使用量が増えている間だけ、画面右下に使用量のバルーンを出す常駐アプリ (Windows 10/11 x64)。
  * メモリ圧縮 (Memory Compression) の量も監視し、圧縮が増えているときもバルーンを出す。
  *
@@ -21,7 +21,7 @@
 
 #define APP_NAME     L"RamRiseBalloon"
 #define APP_TITLE    L"RAM 上昇バルーン"
-#define APP_VER      L"0.1.0"
+#define APP_VER      L"0.2.0"
 #define INI_NAME     L"RamRiseBalloon.ini"
 #define MUTEX_NAME   L"Local\\zmlworks.RamRiseBalloon"
 #define RUN_KEY      L"Software\\Microsoft\\Windows\\CurrentVersion\\Run"
@@ -435,7 +435,7 @@ static NOTIFYICONDATAW gNid;
 static int gPaused;
 static int gWinSamples;     /* 窓のサンプル数 */
 static int gRamRise, gCompRise;
-static double gDeltaUsed, gDeltaComp, gRate;
+static double gDeltaUsed, gDeltaComp;
 static int gQuiet;          /* 増加していないサンプルが続いた数 */
 static int gHold;           /* HoldSec をサンプル数にしたもの */
 static int gDismissed;      /* クリックで閉じた → 今回の増加が終わるまで出さない */
@@ -504,7 +504,7 @@ static void MakeFonts(UINT dpi)
     if (gFHead) DeleteObject(gFHead);
     gFSmall = CreateFontW(-MulDiv(13, (int)dpi, 96), 0, 0, 0, FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET,
                           OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH, L"Yu Gothic UI");
-    gFHead = CreateFontW(-MulDiv(12, (int)dpi, 96), 0, 0, 0, FW_BOLD, 0, 0, 0, DEFAULT_CHARSET,
+    gFHead = CreateFontW(-MulDiv(15, (int)dpi, 96), 0, 0, 0, FW_SEMIBOLD, 0, 0, 0, DEFAULT_CHARSET,
                          OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH, L"Yu Gothic UI");
     gFBig = CreateFontW(-MulDiv(22, (int)dpi, 96), 0, 0, 0, FW_SEMIBOLD, 0, 0, 0, DEFAULT_CHARSET,
                         OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH, L"Yu Gothic UI");
@@ -566,6 +566,25 @@ static void ApplyShape(int w, int h, double radius, double bw)
     }
 }
 
+/* 文字列の幅 (px) */
+static int TextW(HDC dc, HFONT f, const wchar_t *s)
+{
+    SIZE sz = {0, 0};
+    SelectObject(dc, f);
+    GetTextExtentPoint32W(dc, s, (int)wcslen(s), &sz);
+    return sz.cx;
+}
+
+/* 窓の間の増減: 符号付き。|d| >= 1024 MB は GB (小数 2 桁)、それ未満は MB。ほぼ 0 は ±0 MB */
+static void FmtDelta(wchar_t *b, int cap, double bytes)
+{
+    double a = fabs(bytes);
+    if (a < 0.5 * MB) _snwprintf(b, (size_t)cap, L"±0 MB");
+    else if (a >= 1024.0 * MB) _snwprintf(b, (size_t)cap, L"%ls%.2f GB", bytes < 0 ? L"-" : L"+", a / GB);
+    else _snwprintf(b, (size_t)cap, L"%ls%.0f MB", bytes < 0 ? L"-" : L"+", a / MB);
+    b[cap - 1] = 0;
+}
+
 static void RenderBalloon(void)
 {
     HMONITOR mon = TargetMonitor();
@@ -573,16 +592,19 @@ static void RenderBalloon(void)
     UINT dpi = MonitorDpi(mon);
     const Sample *s = HistAgo(0);
     int S = (int)dpi, pad = MulDiv(14, S, 96), lh = MulDiv(20, S, 96);
-    int w = MulDiv(330, S, 96), lines = 2, h, y, iw;
+    int bigH = MulDiv(32, S, 96), dH = MulDiv(22, S, 96), barH = MulDiv(6, S, 96);
+    int w = MulDiv(330, S, 96), lines = 2, h, y, x, iw, span;
     int showTop = gS.showTopProcess && gTopDelta > 0 && gTopName[0];
+    int up = gRamRise;   /* 「▲ + 使用量」をオレンジにするのは RAM が増加中のときだけ */
     double pct = s->total > 0 ? s->used * 100.0 / s->total : 0;
+    double d1 = 0.5 * MB;
     wchar_t b1[64], b2[64], b3[64], line[200];
     BITMAPINFO bi;
     COLORREF barC;
 
     if (showTop) lines++;
-    lines++; /* コミット */
-    h = pad + MulDiv(18, S, 96) + MulDiv(32, S, 96) + MulDiv(8, S, 96) + MulDiv(10, S, 96) + lines * lh + pad - MulDiv(4, S, 96);
+    /* 上余白 + 大 + 増減 + 間 + バー + 間 + 情報行 + 下余白 */
+    h = pad - MulDiv(2, S, 96) + bigH + dH + MulDiv(6, S, 96) + barH + MulDiv(10, S, 96) + lines * lh + pad - MulDiv(4, S, 96);
     iw = w - 2 * pad;
     MakeFonts(dpi);
 
@@ -604,46 +626,45 @@ static void RenderBalloon(void)
     Fill(gMemDC, 0, 0, w, h, C_BG);
     SetBkMode(gMemDC, TRANSPARENT);
 
-    /* 見出し */
+    /* 1 行目 (大): 「▲13.3 / 32.0 GB」。増加中は「▲13.3」だけオレンジ。増加中でなければ矢印なし・通常色 */
     y = pad - MulDiv(2, S, 96);
-    if (gRamRise) Text(gMemDC, gFHead, C_RISE, pad, y, iw, MulDiv(18, S, 96), DT_LEFT | DT_VCENTER, L"▲ RAM 使用量が増加中");
-    else if (gCompRise) Text(gMemDC, gFHead, C_COMP, pad, y, iw, MulDiv(18, S, 96), DT_LEFT | DT_VCENTER, L"▲ メモリ圧縮が増加中");
-    else Text(gMemDC, gFHead, C_DIM, pad, y, iw, MulDiv(18, S, 96), DT_LEFT | DT_VCENTER,
-              gQuiet > gHold ? L"RAM 使用量" : L"RAM 使用量（増加は止まりました）");
-    if (gDemo) Text(gMemDC, gFHead, C_DIM, pad, y, iw, MulDiv(18, S, 96), DT_RIGHT | DT_VCENTER, L"デモ");
-    y += MulDiv(18, S, 96);
+    x = pad;
+    _snwprintf(b1, 64, L"%ls%.1f", up ? L"▲" : L"", s->used / GB); b1[63] = 0;
+    Text(gMemDC, gFBig, up ? C_RISE : C_TEXT, x, y, iw, bigH, DT_LEFT | DT_VCENTER, b1);
+    x += TextW(gMemDC, gFBig, b1);
+    _snwprintf(line, 200, L" / %.1f GB", s->total / GB); line[199] = 0;
+    Text(gMemDC, gFBig, C_TEXT, x, y, iw - (x - pad), bigH, DT_LEFT | DT_VCENTER, line);
+    _snwprintf(b2, 64, L"%.0f%%", pct); b2[63] = 0;
+    Text(gMemDC, gFBig, C_TEXT, pad, y, iw, bigH, DT_RIGHT | DT_VCENTER, b2);
+    y += bigH;
 
-    /* 使用量 (大) */
-    _snwprintf(line, 200, L"%.1f / %.1f GB", s->used / GB, s->total / GB); line[199] = 0;
-    Text(gMemDC, gFBig, C_TEXT, pad, y, iw, MulDiv(32, S, 96), DT_LEFT | DT_VCENTER, line);
-    _snwprintf(b1, 64, L"%.0f%%", pct); b1[63] = 0;
-    Text(gMemDC, gFBig, C_TEXT, pad, y, iw, MulDiv(32, S, 96), DT_RIGHT | DT_VCENTER, b1);
-    y += MulDiv(32, S, 96);
+    /* 2 行目: 過去 WindowSec 秒の増減 (プラスはオレンジ、マイナス・0 は通常色) */
+    span = gHistCount - 1 < gWinSamples ? gHistCount - 1 : gWinSamples;
+    FmtDelta(b1, 64, span > 0 ? gDeltaUsed : 0);
+    Text(gMemDC, gFHead, (span > 0 && gDeltaUsed >= d1) ? C_RISE : C_TEXT, pad, y, iw, dH, DT_LEFT | DT_VCENTER, b1);
+    x = pad + TextW(gMemDC, gFHead, b1);
+    _snwprintf(line, 200, L"　過去 %d 秒", (span > 0 ? span : 0) * gS.sampleMs / 1000); line[199] = 0;
+    Text(gMemDC, gFSmall, C_DIM, x, y, iw - (x - pad), dH, DT_LEFT | DT_VCENTER, line);
+    if (gDemo) Text(gMemDC, gFSmall, C_DIM, pad, y, iw, dH, DT_RIGHT | DT_VCENTER, L"デモ");
+    y += dH + MulDiv(6, S, 96);
 
     /* バー */
     barC = pct >= 90 ? RGB(0xF0, 0x55, 0x55) : pct >= 75 ? RGB(0xF0, 0xA0, 0x40) : RGB(0x4F, 0xA3, 0xFF);
-    Fill(gMemDC, pad, y, iw, MulDiv(6, S, 96), C_BARBG);
-    Fill(gMemDC, pad, y, (int)(iw * (pct > 100 ? 100 : pct) / 100.0 + 0.5), MulDiv(6, S, 96), barC);
-    y += MulDiv(6, S, 96) + MulDiv(12, S, 96);
+    Fill(gMemDC, pad, y, iw, barH, C_BARBG);
+    Fill(gMemDC, pad, y, (int)(iw * (pct > 100 ? 100 : pct) / 100.0 + 0.5), barH, barC);
+    y += barH + MulDiv(10, S, 96);
 
-    /* 増加の速さ */
-    FmtSize(b1, 64, gRate, 1);
-    FmtSize(b2, 64, gDeltaUsed, 1);
-    _snwprintf(line, 200, L"%ls/s　（%d 秒で %ls）", b1, gWinSamples * gS.sampleMs / 1000, b2); line[199] = 0;
-    Text(gMemDC, gFSmall, gRamRise ? C_RISE : C_DIM, pad, y, iw, lh, DT_LEFT | DT_VCENTER, line);
-    y += lh;
-
-    /* 圧縮 */
+    /* 圧縮 (圧縮が増加中なら行を黄色に。右端の増減はプラスならオレンジ) */
     if (s->compOk) {
         FmtSize(b1, 64, s->comp, 0);
         if (s->compOrig > 0) { FmtSize(b3, 64, s->compOrig, 0); _snwprintf(b2, 64, L"（元 約 %ls）", b3); b2[63] = 0; }
         else b2[0] = 0;
         _snwprintf(line, 200, L"圧縮: %ls%ls", b1, b2); line[199] = 0;
-        Text(gMemDC, gFSmall, gCompRise ? C_COMP : C_TEXT, pad, y, iw, lh, DT_LEFT | DT_VCENTER, line);
+        Text(gMemDC, gFSmall, gCompRise ? C_COMP : C_TEXT, pad, y, iw - MulDiv(80, S, 96), lh, DT_LEFT | DT_VCENTER, line);
         if (fabs(gDeltaComp) >= 1.0 * MB) {
-            FmtSize(b3, 64, gDeltaComp, 1);
-            _snwprintf(b1, 64, L"%ls %ls", gCompRise ? L"▲" : L"", b3); b1[63] = 0;
-            Text(gMemDC, gFSmall, gCompRise ? C_COMP : C_DIM, pad, y, iw, lh, DT_RIGHT | DT_VCENTER, b1);
+            FmtDelta(b3, 64, gDeltaComp);
+            _snwprintf(b1, 64, L"%ls%ls", gCompRise ? L"▲ " : L"", b3); b1[63] = 0;
+            Text(gMemDC, gFSmall, gDeltaComp > 0 ? C_RISE : C_DIM, pad, y, iw, lh, DT_RIGHT | DT_VCENTER, b1);
         }
     } else {
         Text(gMemDC, gFSmall, C_DIM, pad, y, iw, lh, DT_LEFT | DT_VCENTER, L"圧縮: n/a");
@@ -780,7 +801,6 @@ static void OnSample(void)
     prev = HistAgo(1);
     thr = gS.riseMB * MB;
     gDeltaUsed = s->used - old->used;
-    gRate = gDeltaUsed / (gWinSamples * gS.sampleMs / 1000.0);
     gDeltaComp = (s->compOk && old->compOk) ? s->comp - old->comp : 0;
     pct = s->total > 0 ? s->used * 100.0 / s->total : 0;
 
@@ -912,7 +932,7 @@ static void Peek(void)
     if (gPaused || !gHistCount) return;
     gDismissed = 0;
     gPeek = (gS.holdSec * 1000 + gS.sampleMs - 1) / gS.sampleMs + 3;
-    gQuiet = gHold + 1;   /* 見出しを「RAM 使用量」に */
+    gQuiet = gHold + 1;
     ShowBalloon();
 }
 
@@ -923,7 +943,7 @@ static int Dump(const wchar_t *path)
     FILE *f = _wfopen(path, L"wb");
     int i;
     if (!f) return 2;
-    fprintf(f, "RamRiseBalloon 0.1.0 --dump\r\n");
+    fprintf(f, "RamRiseBalloon 0.2.0 --dump\r\n");
     for (i = 0; i < 3; i++) {
         Sample s;
         ProcSnap snap = {0, 0, 0};
