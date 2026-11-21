@@ -1,16 +1,16 @@
-# RamRiseBalloon (ram-rise-balloon) v0.2.2
+# RamRiseBalloon (ram-rise-balloon) v0.3.0
 
 > **このアカウントについて / About this account**
 > このリポジトリは、AIアシスタントGrok Botが人間の管理者のもとで自律的に運用しているアカウント（zmlworks）が作成・管理しています。コード・説明文は AI が作成しました。
 > This account is operated autonomously by the AI assistant **Grok Bot** under the supervision of a human administrator.
 
-*A tiny Windows 11 tray app that shows a RAM-usage balloon at the bottom-right only while memory usage is rising, and also watches Windows memory compression. Plain C / Win32.*
+*A tiny Windows 11 tray app that shows a RAM-usage balloon at the bottom-right while memory usage is rising or falling sharply, and also watches Windows memory compression. Plain C / Win32.*
 
 ![balloon](docs/screenshot.png)
 
-**RAM 使用量が増えている間だけ**、画面右下（タスクバーの上）に使用量のバルーンを出す常駐アプリです。
+**RAM の合計使用量（使用中 + 圧縮の節約分）が増えている間、または急に減ったとき**、画面右下（タスクバーの上）に使用量のバルーンを出す常駐アプリです。
 Windows の **メモリ圧縮** の量も監視し、圧縮が増えているとき（＝メモリが足りなくなり Windows が圧縮を始めたとき）にもバルーンを出します。
-増加が止まると数秒で自動的に消えます。
+増減が止まると数秒で自動的に消えます。クリックすると即座に消えます。
 
 - 対象: Windows 11 / 10 (64 ビット)。インストール不要の単体 exe（MinGW-w64 静的リンク。依存はシステム DLL のみ）
 - 管理者権限不要。ネットワーク通信なし
@@ -19,9 +19,9 @@ Windows の **メモリ圧縮** の量も監視し、圧縮が増えていると
 ## 使い方
 
 `RamRiseBalloon.exe` を好きなフォルダーに置いて実行すると、通知領域（タスクバー右下）にアイコン（メモリチップ＋上向き矢印）が出ます。
-あとは何もしなくても、RAM 使用量が増え続けたときだけバルーンが出ます。
+あとは何もしなくても、RAM の合計使用量が増え続けたとき、または急に減ったときにバルーンが出ます。
 
-- バルーンはフォーカスを奪わず、Alt+Tab にも出ません。クリックするとその回は閉じます（増加が一度止まると、次の増加でまた出ます）
+- バルーンはフォーカスを奪わず、Alt+Tab にも出ません。クリックすると即座に閉じます（増減が一度止まると、次の変化でまた出ます）
 - 通知領域のアイコンを **左クリック**: 今の使用量をしばらく表示
 - 通知領域のアイコンを **右クリック**: メニュー
   - 圧縮の取得方法（表示のみ）
@@ -35,26 +35,41 @@ Windows の **メモリ圧縮** の量も監視し、圧縮が増えていると
 
 ### バルーンの内容
 
-見出しはありません。いちばん上が使用量、そのすぐ下が直近 5 回（1 秒ごと）の増減です。
+見出しはありません。いちばん上が使用中 RAM、その下が圧縮の節約分を足した合計、さらにその下が直近 5 回（1 秒ごと）の増減です。使用率の青いバーはありません。
 
 | 行 | 内容 |
 |---|---|
-| 使用量（大） | `▲13.3 / 32.0 GB` と使用率 %。**RAM が増加中のときだけ** 先頭に `▲` が付き、`▲13.3` の部分がオレンジになります（` / 32.0 GB` は通常の色）。増加が止まった後の表示中（`HoldSec`）や、圧縮の増加だけで出ているときは `▲` なし・通常の色です |
-| 増減（5 列） | 1 秒ごと（`SampleMs` ごと）のサンプルの増減を直近 5 回分。**いちばん新しい値が左端に入り、古い値は毎秒右へ流れます**（右端の最も古い値が押し出される）。例: `+190  +65  +220  +105  +225   MB`（単位 MB は行末にまとめて表示。±1024 MB 以上は `+1.25G`）。各値は等幅の列に左寄せで、1 列目の左端は大きな数字の `▲` と同じ位置。**プラスはオレンジ**、マイナスと `0` は通常の色。起動直後などでまだ無い分は右側に `–` |
-| バー | 使用率（75% で橙、90% で赤） |
+| 使用中（大） | `▲13.3 / 32.0 GB` と使用率 %。**増加中のときだけ** 先頭に `▲` が付き、`▲13.3` の部分がオレンジになります（` / 32.0 GB` は通常の色）。**急減中のときだけ** 先頭に `▼` が付き、`▼13.3` の部分が水色になります。どちらでもない表示中（`HoldSec`）や、圧縮の増加だけで出ているときは矢印なし・通常の色です |
+| 含圧縮（大） | 同じ大きさ・同じ形で、使用中に **圧縮の節約分** を足した合計（右端に灰色の「含圧縮」と %）。▲ / ▼ の色分けは、この合計の増減で判定します。バルーンを出すかどうかも、この合計で判定します |
+| 増減（5 列） | 1 秒ごと（`SampleMs` ごと）の、含圧縮合計の増減を直近 5 回分。**いちばん新しい値が左端に入り、古い値は毎秒右へ流れます**（右端の最も古い値が押し出される）。例: `+190  +65  +220  +105  +225   MB`（単位 MB は行末にまとめて表示。±1024 MB 以上は `+1.25G`）。各値は等幅の列に左寄せで、1 列目の左端は大きな数字の `▲` と同じ位置。**プラスはオレンジ、マイナスは水色**、`0` は通常の色。起動直後などでまだ無い分は右側に `–` |
 | 圧縮 | **左端**に窓の間（`WindowSec`）の増減を固定幅の枠で表示: 圧縮が増加中は `▲70 MB`、それ以外のプラスは `+70 MB`（どちらもオレンジ）、マイナス・`±0 MB` は灰色。その右に圧縮ストアの物理メモリ量（取得できれば「元 約 X GB」= 圧縮前のデータ量の推定）。圧縮が増加中は本文が黄色。取得できなければ `n/a` |
 | コミット | コミット済み / コミット上限（左の枠は空けて本文の位置をそろえる） |
 | 増加最大 | 左の枠に増加量（例 `+525 MB`）、その右に窓の間にいちばん増えたプロセス（プライベート ワーキングセット） |
 
-## 「増加中」の判定
+## 「増加中」「急減」の判定
 
-1 秒ごと（`SampleMs`）に `GlobalMemoryStatusEx`（使用中 = 搭載 − 利用可能）と `GetPerformanceInfo`（コミット）を読み、
-直近 `WindowSec` 秒（既定 5 秒）の差で判定します。
+1 秒ごと（`SampleMs`）に `GlobalMemoryStatusEx`（使用中 = 搭載 − 利用可能）と圧縮ストア、`GetPerformanceInfo`（コミット）を読み、
+**含圧縮の合計**（後述）の、直近 `WindowSec` 秒（既定 5 秒）の差で判定します。
 
-- **RAM 増加中**: 窓の間に使用中 RAM が `RiseMB`（既定 50 MB）以上増え、かつ直近 1 回で `RiseMB/2` 以上は減っていない
-- **圧縮増加中**: 窓の間に圧縮ストアが `CompRiseMB`（既定 20 MB）以上増えた。圧縮が進むと使用中 RAM が増えないように見える（増加が圧縮に隠れる）ため、RAM が横ばいでもこれだけでバルーンを出します
-- どちらでもない状態が `HoldSec`（既定 3 秒）続いたらフェードアウトします
+- **増加中**: 窓の間に含圧縮合計が `RiseMB`（既定 50 MB）以上増え、かつ直近 1 回で `RiseMB/2` 以上は減っていない
+- **急減**: 窓の間に含圧縮合計が `RiseMB` の **3 倍**（既定 150 MB）以上減り、かつ直近 1 回でその半分以上は増えていない
+- **圧縮増加中**: 窓の間に圧縮ストアが `CompRiseMB`（既定 20 MB）以上増えた。圧縮が進むと使用中 RAM が増えないように見えることがあるため、合計が横ばいでもこれだけでバルーンを出します
+- どれでもない状態が `HoldSec`（既定 3 秒）続いたらフェードアウトします
 - 一瞬の揺れ（数 MB の上下）では出ません
+
+## 含圧縮の合計（と、二重計上しない理由）
+
+タスク マネージャーの「使用中」と同じく、このアプリの「使用中」は `GlobalMemoryStatusEx` の 搭載 − 利用可能 です。
+この値には、圧縮データを載せている **Memory Compression プロセスのワーキングセット（圧縮ストアの物理サイズ）が既に含まれています**。
+そこに圧縮ストアの物理サイズをもう一度足すと、同じメモリを二重に数えてしまいます。
+
+そこで合計は次のようにしています。
+
+- **含圧縮合計 = 使用中 + （圧縮前の推定サイズ − 圧縮ストアの物理サイズ）**
+- 足しているのは「圧縮によって見えなくなった分」（節約分）だけです。圧縮しなかった場合の使用量に相当します
+- 圧縮前のサイズが取れないとき（通常の権限ではストア統計が使えないことが多い）は、足せる値が無いので合計は使用中と同じになります
+
+圧縮の取得方法そのものは次の節のとおりです。物理サイズには Memory Compression プロセスのワーキングセットを使い、管理者として実行できたときだけストア統計の比率で「元のサイズ」を推定します。
 
 ## メモリ圧縮の取得方法（と限界）
 
@@ -80,11 +95,11 @@ exe と同じフォルダーに作ります（書き込めない場所なら `%A
 | キー | 既定 | 意味 |
 |---|---|---|
 | `SampleMs` | 1000 | サンプリング間隔（ミリ秒, 250〜10000） |
-| `WindowSec` | 5 | 増加を判定する時間の窓（秒, 2〜30） |
-| `RiseMB` | 50 | 窓の間にこの MB 以上増えたら「RAM 増加中」 |
-| `CompRiseMB` | 20 | 窓の間に圧縮がこの MB 以上増えたら「圧縮増加中」 |
-| `HoldSec` | 3 | 増加が止まってから消えるまでの秒数 |
-| `MinPercent` | 0 | 使用率がこの % 未満のときは出さない |
+| `WindowSec` | 5 | 増減を判定する時間の窓（秒, 2〜30） |
+| `RiseMB` | 50 | 窓の間に含圧縮合計がこの MB 以上増えたら「増加中」。急減の閾値はこの 3 倍（150 MB） |
+| `CompRiseMB` | 20 | 窓の間に圧縮がこの MB 以上増えたら「圧縮が増加中」 |
+| `HoldSec` | 3 | 増減が止まってから消えるまでの秒数 |
+| `MinPercent` | 0 | 含圧縮合計の使用率がこの % 未満のときは出さない |
 | `ShowTopProcess` | 1 | いちばん増えたプロセスを表示する |
 | `ClickThrough` | 0 | 1 = バルーンをクリック透過にする（クリックで閉じられなくなる） |
 | `Opacity` | 240 | 不透明度（80〜255） |
@@ -93,29 +108,38 @@ exe と同じフォルダーに作ります（書き込めない場所なら `%A
 ## 表示位置
 
 タスクバーがあるモニター（見つからなければプライマリ モニター）の作業領域の右下に、下から少しスライドしながらフェードインします。
+作業領域の外（タスクバーの上）にはみ出さないように位置を制限しています。
 解像度・DPI・タスクバーの位置が変わったら次の表示から追従します。
 
 ## ビルド (Linux)
 
     sudo apt install gcc-mingw-w64-x86-64 binutils-mingw-w64-x86-64 zip   # zip が無ければ python3 で作ります
+    ./tests/run.sh      # 判定ロジックの単体テスト
     ./build.sh          # → RamRiseBalloon.exe
-    ./build.sh zip      # → ../out/ram-rise-balloon-v0.2.2-win64.zip
+    ./build.sh zip      # → ../out/ram-rise-balloon-v0.3.0-win64.zip
 
 `-Wall -Wextra` で警告ゼロ。アイコンは `res/make_icon.py`（Pillow）で生成した `res/app.ico` を埋め込んでいます。
 
 ## ファイル
 
-- `ramrise.c` 本体 / `res/app.rc` リソース（アイコン・マニフェスト・バージョン 0.2.2）/ `res/app.manifest` / `res/make_icon.py`
-- `docs/` Wine で撮ったスクリーンショット（`--demo` モード。数値はダミー）
+- `ramrise.c` 本体 / `judge.h` バルーン判定（単体テストと共有） / `res/app.rc` リソース（アイコン・マニフェスト・バージョン 0.3.0）/ `res/app.manifest` / `res/make_icon.py`
+- `tests/run.sh` / `tests/test_judge.c` 増加・急減・含圧縮合計の判定テスト
+- `docs/` バルーンの見本画像（`--demo` 相当のダミー値）
 
 ## 補足
 
-- `--demo` を付けて起動すると、ダミーの上昇カーブ（RAM と圧縮）でバルーンの動きを確認できます（バルーンの 2 行目の右端に「デモ」と出ます）
+- `--demo` を付けて起動すると、ダミーの上昇・急減カーブ（RAM と圧縮）でバルーンの動きを確認できます（増減の行の右端に「デモ」と出ます）
 - 起動は 1 つだけ（2 つ目は案内を出して終了）。終了すると通知領域のアイコンも消えます。Explorer が再起動してもアイコンを出し直します
 - CPU 負荷: 1 秒に 1 回メモリ情報とプロセス一覧を読むだけです
 
 ## 変更履歴
 
+- **0.3.0** (2026-11-22)
+  - 使用率の青いバーを廃止
+  - 使用中と同じ大きさで、圧縮の節約分を足した合計（「含圧縮」）を表示。二重計上を避けるため、使用中に既に含まれる圧縮ストアの物理サイズは足さない
+  - バルーンを出す判定を、使用中ではなくこの合計に変更
+  - 合計が `RiseMB` の約 3 倍以上急減したときもバルーンを出す（`▼`、水色）
+  - バルーンをクリックするとフェードせず直ちに消える。角の透明部分はクリックを通し、タスクバーに重ならないよう位置を制限
 - **0.2.2** (2026-11-01)
   - 2 行目の 5 個の増減を「左から右へ流れる」向きに: 最新の値が左端に入り、毎秒右へずれる。各列は左寄せ
   - 圧縮の増減（`▲70 MB` など）を行の左端の固定幅の枠に移動し、1 行目の `▲`・2 行目の 1 列目と左端をそろえた。増加最大の増加量も同じ枠に移動し、コミット行の本文も同じ位置にそろえた
@@ -132,10 +156,14 @@ exe と同じフォルダーに作ります（書き込めない場所なら `%A
 
 ## English (short)
 
-RamRiseBalloon shows a small dark, non-activating, topmost balloon at the bottom-right (above the taskbar) **only while RAM usage is rising**
-(used memory grew by ≥ `RiseMB` over the last `WindowSec` seconds), and also when the Windows memory-compression store grows
-(≥ `CompRiseMB`), since compression can hide RAM growth. It shows `▲used / total GB` and % (the `▲used` part in orange only while RAM is rising), the last 5 per-sample (1 s) signed changes right below it, newest entering at the left and flowing right (plus = orange); the compression delta sits in a fixed slot at the left edge, the compressed amount,
-commit charge and the process that grew most. Compression is read via `NtQuerySystemInformation(SystemStoreInformation)` when elevated,
+RamRiseBalloon shows a small dark, non-activating, topmost balloon at the bottom-right (above the taskbar) **while RAM usage is rising**
+(combined usage — in-use plus compression savings — grew by ≥ `RiseMB` over the last `WindowSec` seconds), **or falling sharply**
+(combined usage fell by ≥ 3× `RiseMB`; shown with a teal `▼`), and also when the Windows memory-compression store grows
+(≥ `CompRiseMB`). Combined usage is `used + max(0, original_est − store_working_set)`: `used` (`GlobalMemoryStatusEx` total−available)
+already includes the Memory Compression working set, so only the savings are added, to avoid double-counting.
+It shows `▲used / total GB` and the same-size combined line, the last 5 per-sample (1 s) signed changes of the combined value
+(newest at the left, plus = orange, minus = teal), the compression delta in a fixed left slot, commit charge and the process that grew most.
+A click dismisses the balloon immediately. Compression is read via `NtQuerySystemInformation(SystemStoreInformation)` when elevated,
 otherwise from the working set of the "Memory Compression" process in the process list (no admin, no process handle). Tray menu: pause,
 open INI, start with Windows (HKCU Run), exit. Settings live in `RamRiseBalloon.ini` next to the exe (fallback `%APPDATA%`).
 Single exe, plain C/Win32, per-monitor DPI aware, MinGW-w64 build. MIT License.

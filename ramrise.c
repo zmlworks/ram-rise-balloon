@@ -1,6 +1,7 @@
 /*
- * RamRiseBalloon (ram-rise-balloon) v0.2.2
- * RAM 使用量が増えている間だけ、画面右下に使用量のバルーンを出す常駐アプリ (Windows 10/11 x64)。
+ * RamRiseBalloon (ram-rise-balloon) v0.3.0
+ * RAM 使用量（圧縮分を足した合計）が増えている間、または急に減ったときに、
+ * 画面右下に使用量のバルーンを出す常駐アプリ (Windows 10/11 x64)。
  * メモリ圧縮 (Memory Compression) の量も監視し、圧縮が増えているときもバルーンを出す。
  *
  * plain C / Win32 API。MinGW-w64 でクロスコンパイル (build.sh)。
@@ -21,7 +22,7 @@
 
 #define APP_NAME     L"RamRiseBalloon"
 #define APP_TITLE    L"RAM 上昇バルーン"
-#define APP_VER      L"0.2.2"
+#define APP_VER      L"0.3.0"
 #define INI_NAME     L"RamRiseBalloon.ini"
 #define MUTEX_NAME   L"Local\\zmlworks.RamRiseBalloon"
 #define RUN_KEY      L"Software\\Microsoft\\Windows\\CurrentVersion\\Run"
@@ -39,6 +40,8 @@
 #define MB           (1024.0 * 1024.0)
 #define GB           (1024.0 * 1024.0 * 1024.0)
 #define HIST_MAX     64
+
+#include "judge.h"
 
 /* ---------------------------------------------------------------- 設定 (INI) */
 typedef struct {
@@ -66,7 +69,8 @@ static const wchar_t kDefaultIni[] =
     L"SampleMs=1000\r\n"
     L"; 増加を判定する時間の窓 (秒, 2-30)\r\n"
     L"WindowSec=5\r\n"
-    L"; 窓の間に使用中 RAM がこの MB 以上増えたら「増加中」としてバルーンを出す\r\n"
+    L"; 窓の間に「使用中 + 圧縮の節約分」がこの MB 以上増えたら「増加中」としてバルーンを出す\r\n"
+    L"; 急減の閾値は RiseMB の 3 倍（設定項目は無し）\r\n"
     L"RiseMB=50\r\n"
     L"; 窓の間に圧縮メモリがこの MB 以上増えたら「圧縮が増加中」としてバルーンを出す\r\n"
     L"CompRiseMB=20\r\n"
@@ -352,16 +356,24 @@ static void TakeSample(Sample *s, ProcSnap *snap)
 
     memset(s, 0, sizeof *s);
     if (gDemo) {
-        /* 40 サンプル周期: 5 秒平ら → 15 秒上昇 (約 +150 MB/s) → 20 秒平ら/少し減る */
-        int t = gDemoT % 40, rise = t < 5 ? 0 : t < 20 ? t - 5 : 15, crise;
+        /* 50 サンプル周期: 5 秒平ら → 15 秒上昇 → 5 秒ほぼ平ら → 10 秒急減 → 15 秒平ら */
+        int t = gDemoT % 50, rise, crise, drop = 0;
         static const int kWobble[7] = {0, -40, 35, -10, 60, -25, 15};   /* 1 秒ごとの増減がばらつくように */
-        double jitter = (double)kWobble[gDemoT % 7] * MB;
+        double jitter = (double)kWobble[gDemoT % 7] * MB, used;
+        if (t < 5) rise = 0;
+        else if (t < 20) rise = t - 5;
+        else rise = 15;
+        if (t >= 25 && t < 35) drop = t - 24;          /* 1..10 秒分、約 -200 MB/s */
+        else if (t >= 35) drop = 10;
 #ifdef DEMO_SPIKE
-        if (t >= 12) jitter += 1300.0 * MB;
+        if (t >= 12 && t < 25) jitter += 1300.0 * MB;
 #endif
         s->total = 32.0 * GB;
-        s->used = 12.0 * GB + rise * 150.0 * MB + (t >= 20 ? -(t - 20) * 4.0 * MB : 0) + jitter;
-        s->commit = 18.0 * GB + rise * 160.0 * MB;
+        used = 12.0 * GB + rise * 150.0 * MB;
+        if (t >= 20 && t < 25) used -= (t - 20) * 4.0 * MB;
+        used -= drop * 200.0 * MB;
+        s->used = used + jitter;
+        s->commit = 18.0 * GB + rise * 160.0 * MB - drop * 200.0 * MB;
         s->commitLimit = 40.0 * GB;
         crise = t < 10 ? 0 : t < 24 ? t - 10 : 14;
         s->comp = 0.8 * GB + crise * 35.0 * MB;
@@ -369,7 +381,7 @@ static void TakeSample(Sample *s, ProcSnap *snap)
         s->compOk = 1;
         gCompMethod = COMP_STORE;
         snap->n = 0;
-        SnapPush(snap, 1000, 1, 1.0 * GB + rise * 105.0 * MB);
+        SnapPush(snap, 1000, 1, 1.0 * GB + rise * 105.0 * MB - drop * 140.0 * MB);
         SnapPush(snap, 2000, 1, 0.5 * GB + rise * 20.0 * MB);
         gDemoT++;
         return;
@@ -438,11 +450,13 @@ static UINT gMsgTaskbarCreated;
 static NOTIFYICONDATAW gNid;
 static int gPaused;
 static int gWinSamples;     /* 窓のサンプル数 */
-static int gRamRise, gCompRise;
-static double gDeltaUsed, gDeltaComp;
-static int gQuiet;          /* 増加していないサンプルが続いた数 */
+static int gUsedRise, gUsedDrop;     /* 1 行目 (使用中) の▲/▼用 */
+static int gCombRise, gCombDrop;     /* 2 行目 (含圧縮) の▲/▼、バルーン判定 */
+static int gCompRise;
+static double gDeltaUsed, gDeltaComb, gDeltaComp;
+static int gQuiet;          /* 増減していないサンプルが続いた数 */
 static int gHold;           /* HoldSec をサンプル数にしたもの */
-static int gDismissed;      /* クリックで閉じた → 今回の増加が終わるまで出さない */
+static int gDismissed;      /* クリックで閉じた → 今回の増減が終わるまで出さない */
 static int gPeek;           /* 手動表示の残りサンプル数 */
 static int gShown;          /* 表示中 (フェードアウト中は 0) */
 
@@ -459,6 +473,7 @@ static int     gBW, gBH;
 static UINT    gFontDpi;
 static HFONT   gFSmall, gFBig, gFHead;
 static POINT   gBalPos;     /* 最終位置 (スライド前) */
+static RECT    gWork;       /* 対象モニターの作業領域 (タスクバーを含まない) */
 
 /* ---------------------------------------------------------------- 書式 */
 static void FmtSize(wchar_t *b, int cap, double bytes, int sign)
@@ -521,8 +536,8 @@ static void MakeFonts(UINT dpi)
 #define C_TEXT    RGB(0xEC, 0xEE, 0xF1)
 #define C_DIM     RGB(0x9A, 0xA1, 0xAC)
 #define C_RISE    RGB(0xFF, 0x8A, 0x3D)
+#define C_DROP    RGB(0x3D, 0xC6, 0xE6)
 #define C_COMP    RGB(0xFF, 0xC1, 0x4D)
-#define C_BARBG   RGB(0x3A, 0x3F, 0x48)
 
 static void Text(HDC dc, HFONT f, COLORREF c, int x, int y, int w, int h, UINT fmt, const wchar_t *s)
 {
@@ -600,6 +615,39 @@ static void FmtStep(wchar_t *b, int cap, double bytes)
     b[cap - 1] = 0;
 }
 
+static double SampleCombined(const Sample *s)
+{
+    return RrCombinedUsed(s->used, s->compOk, s->comp, s->compOrig);
+}
+
+/* 大きな使用量の行: 「▲13.3 / 32.0 GB」と右端の %（tag があれば「含圧縮  44%」）。
+   増加中は先頭と数値がオレンジ、急減中は▼と数値が水色。 / total は通常色。 */
+static void DrawUsageLine(HDC dc, int pad, int y, int iw, int bigH,
+                          int rise, int drop, double val, double total, const wchar_t *tag)
+{
+    wchar_t b1[64], rest[64], right[80];
+    const wchar_t *arrow = rise ? L"▲" : drop ? L"▼" : L"";
+    COLORREF c = rise ? C_RISE : drop ? C_DROP : C_TEXT;
+    int x = pad;
+    _snwprintf(b1, 64, L"%ls%.1f", arrow, val / GB); b1[63] = 0;
+    Text(dc, gFBig, c, x, y, iw, bigH, DT_LEFT | DT_VCENTER, b1);
+    x += TextW(dc, gFBig, b1);
+    _snwprintf(rest, 64, L" / %.1f GB", total / GB); rest[63] = 0;
+    Text(dc, gFBig, C_TEXT, x, y, iw - (x - pad), bigH, DT_LEFT | DT_VCENTER, rest);
+    if (tag && tag[0]) {
+        wchar_t pct[32];
+        int tw;
+        _snwprintf(pct, 32, L"%.0f%%", total > 0 ? val * 100.0 / total : 0); pct[31] = 0;
+        tw = TextW(dc, gFBig, pct);
+        Text(dc, gFBig, C_TEXT, pad, y, iw, bigH, DT_RIGHT | DT_VCENTER, pct);
+        _snwprintf(right, 80, L"%ls  ", tag); right[79] = 0;
+        Text(dc, gFSmall, C_DIM, pad, y, iw - tw, bigH, DT_RIGHT | DT_VCENTER, right);
+    } else {
+        _snwprintf(right, 80, L"%.0f%%", total > 0 ? val * 100.0 / total : 0); right[79] = 0;
+        Text(dc, gFBig, C_TEXT, pad, y, iw, bigH, DT_RIGHT | DT_VCENTER, right);
+    }
+}
+
 static void RenderBalloon(void)
 {
     HMONITOR mon = TargetMonitor();
@@ -607,18 +655,15 @@ static void RenderBalloon(void)
     UINT dpi = MonitorDpi(mon);
     const Sample *s = HistAgo(0);
     int S = (int)dpi, pad = MulDiv(14, S, 96), lh = MulDiv(20, S, 96);
-    int bigH = MulDiv(32, S, 96), dH = MulDiv(22, S, 96), barH = MulDiv(6, S, 96);
-    int w = MulDiv(330, S, 96), lines = 2, h, y, x, iw, slotW;
+    int bigH = MulDiv(32, S, 96), dH = MulDiv(22, S, 96);
+    int w = MulDiv(330, S, 96), lines = 2, h, y, iw, slotW;
     int showTop = gS.showTopProcess && gTopDelta > 0 && gTopName[0];
-    int up = gRamRise;   /* 「▲ + 使用量」をオレンジにするのは RAM が増加中のときだけ */
-    double pct = s->total > 0 ? s->used * 100.0 / s->total : 0;
     wchar_t b1[64], b2[64], b3[64], line[200];
     BITMAPINFO bi;
-    COLORREF barC;
 
     if (showTop) lines++;
-    /* 上余白 + 大 + 増減 + 間 + バー + 間 + 情報行 + 下余白 */
-    h = pad - MulDiv(2, S, 96) + bigH + dH + MulDiv(6, S, 96) + barH + MulDiv(10, S, 96) + lines * lh + pad - MulDiv(4, S, 96);
+    /* 上余白 + 使用中 (大) + 含圧縮 (大) + 増減 + 間 + 情報行 + 下余白 */
+    h = pad - MulDiv(2, S, 96) + bigH + bigH + dH + MulDiv(10, S, 96) + lines * lh + pad - MulDiv(4, S, 96);
     iw = w - 2 * pad;
     MakeFonts(dpi);
 
@@ -640,21 +685,18 @@ static void RenderBalloon(void)
     Fill(gMemDC, 0, 0, w, h, C_BG);
     SetBkMode(gMemDC, TRANSPARENT);
 
-    /* 1 行目 (大): 「▲13.3 / 32.0 GB」。増加中は「▲13.3」だけオレンジ。増加中でなければ矢印なし・通常色 */
+    /* 1 行目 (大): 使用中 RAM。「▲13.3 / 32.0 GB」。増加中は▲と数値がオレンジ、急減中は▼と数値が水色 */
     y = pad - MulDiv(2, S, 96);
-    x = pad;
-    _snwprintf(b1, 64, L"%ls%.1f", up ? L"▲" : L"", s->used / GB); b1[63] = 0;
-    Text(gMemDC, gFBig, up ? C_RISE : C_TEXT, x, y, iw, bigH, DT_LEFT | DT_VCENTER, b1);
-    x += TextW(gMemDC, gFBig, b1);
-    _snwprintf(line, 200, L" / %.1f GB", s->total / GB); line[199] = 0;
-    Text(gMemDC, gFBig, C_TEXT, x, y, iw - (x - pad), bigH, DT_LEFT | DT_VCENTER, line);
-    _snwprintf(b2, 64, L"%.0f%%", pct); b2[63] = 0;
-    Text(gMemDC, gFBig, C_TEXT, pad, y, iw, bigH, DT_RIGHT | DT_VCENTER, b2);
+    DrawUsageLine(gMemDC, pad, y, iw, bigH, gUsedRise, gUsedDrop, s->used, s->total, NULL);
     y += bigH;
 
-    /* 2 行目: 直近 5 回のサンプル (SampleMs ごと) の増減。いちばん新しい値が左端に入り、古い値は毎回右へ流れる
+    /* 2 行目 (大): 使用中 + 圧縮の節約分（物理サイズは使用中に既に含まれるので足さない） */
+    DrawUsageLine(gMemDC, pad, y, iw, bigH, gCombRise, gCombDrop, SampleCombined(s), s->total, L"含圧縮");
+    y += bigH;
+
+    /* 3 行目: 直近 5 回のサンプルの、含圧縮合計の増減。いちばん新しい値が左端に入り、古い値は毎回右へ流れる
        (右端の最も古い値が押し出される)。各列は等幅で左寄せ (1 列目の左端 = 1 行目の▲・圧縮の増減の左端)。
-       プラスはオレンジ、マイナス・0 は通常色。まだ無い分は「–」(右側に出る) */
+       プラスはオレンジ、マイナスは水色、0 は通常色。まだ無い分は「–」(右側に出る) */
     {
         int k, cw, unitW = TextW(gMemDC, gFSmall, L"MB"), gap = MulDiv(6, S, 96);
         int avail = iw - (gDemo ? TextW(gMemDC, gFSmall, L"デモ") + gap * 2 : 0);
@@ -663,9 +705,9 @@ static void RenderBalloon(void)
             int col = k;   /* k = 0 (最新) が左端 */
             COLORREF c = C_DIM;
             if (gHistCount > k + 1) {
-                double d = HistAgo(k)->used - HistAgo(k + 1)->used;
+                double d = SampleCombined(HistAgo(k)) - SampleCombined(HistAgo(k + 1));
                 FmtStep(b1, 64, d);
-                c = d >= 0.5 * MB ? C_RISE : C_TEXT;
+                c = d >= 0.5 * MB ? C_RISE : d <= -0.5 * MB ? C_DROP : C_TEXT;
             } else {
                 wcscpy(b1, L"–");
             }
@@ -674,7 +716,7 @@ static void RenderBalloon(void)
                 int room = cw - MulDiv(4, S, 96);
                 if (TextW(gMemDC, f, b1) > room) f = gFSmall;
                 if (TextW(gMemDC, f, b1) > room && gHistCount > k + 1) {
-                    double d = HistAgo(k)->used - HistAgo(k + 1)->used;
+                    double d = SampleCombined(HistAgo(k)) - SampleCombined(HistAgo(k + 1));
                     _snwprintf(b1, 64, L"%ls%.1fG", d < 0 ? L"-" : L"+", fabs(d) / GB); b1[63] = 0;
                 }
                 Text(gMemDC, f, c, pad + col * cw, y, cw, dH, DT_LEFT | DT_VCENTER, b1);
@@ -683,13 +725,7 @@ static void RenderBalloon(void)
         Text(gMemDC, gFSmall, C_DIM, pad + STEP_COLS * cw + gap, y, unitW + gap, dH, DT_LEFT | DT_VCENTER, L"MB");
     }
     if (gDemo) Text(gMemDC, gFSmall, C_DIM, pad, y, iw, dH, DT_RIGHT | DT_VCENTER, L"デモ");
-    y += dH + MulDiv(6, S, 96);
-
-    /* バー */
-    barC = pct >= 90 ? RGB(0xF0, 0x55, 0x55) : pct >= 75 ? RGB(0xF0, 0xA0, 0x40) : RGB(0x4F, 0xA3, 0xFF);
-    Fill(gMemDC, pad, y, iw, barH, C_BARBG);
-    Fill(gMemDC, pad, y, (int)(iw * (pct > 100 ? 100 : pct) / 100.0 + 0.5), barH, barC);
-    y += barH + MulDiv(10, S, 96);
+    y += dH + MulDiv(10, S, 96);
 
     /* 情報行: 左端に固定幅の枠 (増減)、その右に本文。枠の左端は 1 行目の▲・2 行目の 1 列目と同じ */
     slotW = TextW(gMemDC, gFSmall, L"▲888 MB");
@@ -736,6 +772,7 @@ static void RenderBalloon(void)
     mi.cbSize = sizeof mi;
     if (GetMonitorInfoW(mon, &mi)) {
         int m = MulDiv(12, S, 96);
+        gWork = mi.rcWork;
         gBalPos.x = mi.rcWork.right - w - m;
         gBalPos.y = mi.rcWork.bottom - h - m;
     }
@@ -751,6 +788,13 @@ static void PresentBalloon(void)
     if (!gBmp) return;
     sz.cx = gBW; sz.cy = gBH;
     if (gAnimDir >= 0) pt.y += (int)((1 - e) * MulDiv(24, (int)dpi, 96));
+    /* スライド中も作業領域（タスクバーの外）に収める。以前は開始位置がタスクバーに重なっていた */
+    if (gWork.bottom > gWork.top) {
+        if (pt.y + sz.cy > gWork.bottom) pt.y = gWork.bottom - sz.cy;
+        if (pt.y < gWork.top) pt.y = gWork.top;
+        if (pt.x + sz.cx > gWork.right) pt.x = gWork.right - sz.cx;
+        if (pt.x < gWork.left) pt.x = gWork.left;
+    }
     bf.BlendOp = AC_SRC_OVER; bf.BlendFlags = 0; bf.AlphaFormat = AC_SRC_ALPHA;
     bf.SourceConstantAlpha = (BYTE)(gS.opacity * (gAnimDir >= 0 ? e : t) + 0.5);
     UpdateLayeredWindow(gBal, NULL, &pt, &sz, gMemDC, &src, 0, &bf, ULW_ALPHA);
@@ -798,6 +842,18 @@ static void HideBalloon(void)
     if (IsWindowVisible(gBal)) StartAnim(-1);
 }
 
+/* クリックで閉じるとき: フェードせず即座に消す（出ている間タスクバーが押せなくなることがあるため） */
+static void HideBalloonNow(void)
+{
+    gShown = 0;
+    gAnimDir = 0;
+    gAnimT = 0;
+    if (gBal) {
+        KillTimer(gBal, TID_ANIM);
+        ShowWindow(gBal, SW_HIDE);
+    }
+}
+
 static void AnimTick(void)
 {
     DWORD el = GetTickCount() - gAnimStart;
@@ -834,7 +890,8 @@ static void OnSample(void)
     Sample *s = &gHist[gHistPos];
     const Sample *old, *prev;
     int hold, rising;
-    double pct, thr;
+    double comb, oldComb, prevComb, pct;
+    RrJudge jc, ju;
 
     TakeSample(s, &gSnaps[gHistPos]);
     gHistPos = (gHistPos + 1) % HIST_MAX;
@@ -846,19 +903,30 @@ static void OnSample(void)
 
     old = HistAgo(gWinSamples);
     prev = HistAgo(1);
-    thr = gS.riseMB * MB;
+    comb = SampleCombined(s);
+    oldComb = SampleCombined(old);
+    prevComb = SampleCombined(prev);
     gDeltaUsed = s->used - old->used;
+    gDeltaComb = comb - oldComb;
     gDeltaComp = (s->compOk && old->compOk) ? s->comp - old->comp : 0;
-    pct = s->total > 0 ? s->used * 100.0 / s->total : 0;
+    pct = s->total > 0 ? comb * 100.0 / s->total : 0;
 
-    /* 窓の中で閾値以上増え、かつ直近 1 サンプルで大きく減っていない = 増加中 */
-    gRamRise = gHistCount > gWinSamples && gDeltaUsed >= thr && (s->used - prev->used) > -thr / 2;
-    gCompRise = gHistCount > gWinSamples && s->compOk && old->compOk && gDeltaComp >= gS.compRiseMB * MB;
-    rising = (gRamRise || gCompRise) && pct >= gS.minPercent;
+    /* 判定は含圧縮の合計。使用中の行の▲/▼だけ、使用中そのものの増減で色を付ける */
+    RrJudgeWindow(gHistCount, gWinSamples, gDeltaComb, comb - prevComb,
+                  gS.riseMB, gS.compRiseMB, s->compOk && old->compOk, gDeltaComp,
+                  pct, gS.minPercent, &jc);
+    RrJudgeWindow(gHistCount, gWinSamples, gDeltaUsed, s->used - prev->used,
+                  gS.riseMB, gS.compRiseMB, 0, 0, 0, 0, &ju);
+    gCombRise = jc.rise;
+    gCombDrop = jc.drop;
+    gCompRise = jc.comp_rise;
+    gUsedRise = ju.rise;
+    gUsedDrop = ju.drop;
+    rising = jc.active;
 
     hold = gHold = (gS.holdSec * 1000 + gS.sampleMs - 1) / gS.sampleMs;
     if (rising) gQuiet = 0; else gQuiet++;
-    if (gQuiet > hold) gDismissed = 0;   /* 増加が終わった → 次の増加でまた出す */
+    if (gQuiet > hold) gDismissed = 0;   /* 増減が終わった → 次の変化でまた出す */
 
     if (gPeek > 0) gPeek--;
     if ((gS.showTopProcess) && (gShown || rising || gPeek)) FindTopGrower(gWinSamples);
@@ -904,8 +972,9 @@ static void UpdateTray(void)
     else if (!s) _snwprintf(tip, 128, L"%ls", APP_TITLE);
     else {
         if (s->compOk) FmtSize(c, 64, s->comp, 0); else wcscpy(c, L"n/a");
-        _snwprintf(tip, 128, L"%ls\nRAM %.0f%%（%.1f / %.1f GB）\n圧縮 %ls", APP_TITLE,
-                   s->total > 0 ? s->used * 100.0 / s->total : 0.0, s->used / GB, s->total / GB, c);
+        _snwprintf(tip, 128, L"%ls\nRAM %.0f%%（%.1f / %.1f GB）\n含圧縮 %.1f GB\n圧縮 %ls", APP_TITLE,
+                   s->total > 0 ? s->used * 100.0 / s->total : 0.0, s->used / GB, s->total / GB,
+                   SampleCombined(s) / GB, c);
     }
     tip[127] = 0;
     if (wcscmp(tip, gNid.szTip)) {
@@ -990,7 +1059,7 @@ static int Dump(const wchar_t *path)
     FILE *f = _wfopen(path, L"wb");
     int i;
     if (!f) return 2;
-    fprintf(f, "RamRiseBalloon 0.2.2 --dump\r\n");
+    fprintf(f, "RamRiseBalloon 0.3.0 --dump\r\n");
     for (i = 0; i < 3; i++) {
         Sample s;
         ProcSnap snap = {0, 0, 0};
@@ -998,8 +1067,8 @@ static int Dump(const wchar_t *path)
         int store = QueryStore(&ci);
         if (i) Sleep(1000);
         TakeSample(&s, &snap);
-        fprintf(f, "sample %d: used=%.1f MB total=%.1f MB commit=%.1f/%.1f MB procs=%d\r\n", i,
-                s.used / MB, s.total / MB, s.commit / MB, s.commitLimit / MB, snap.n);
+        fprintf(f, "sample %d: used=%.1f MB combined=%.1f MB total=%.1f MB commit=%.1f/%.1f MB procs=%d\r\n", i,
+                s.used / MB, SampleCombined(&s) / MB, s.total / MB, s.commit / MB, s.commitLimit / MB, snap.n);
         fprintf(f, "  store query: %s (pid=%lu ws=%lu data=%.1f MB compressed=%.1f MB)\r\n",
                 store ? "ok" : "failed", store ? ci.CompressionPid : 0UL, store ? ci.WorkingSetSize : 0UL,
                 store ? (double)ci.TotalDataCompressed / MB : 0.0, store ? (double)ci.TotalCompressedSize / MB : 0.0);
@@ -1020,10 +1089,13 @@ static LRESULT CALLBACK BalProc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
 {
     switch (msg) {
     case WM_MOUSEACTIVATE: return MA_NOACTIVATE;
+    case WM_LBUTTONDOWN:
+    case WM_RBUTTONDOWN:
+    case WM_MBUTTONDOWN:
     case WM_LBUTTONUP:
     case WM_RBUTTONUP:
         gDismissed = 1; gPeek = 0;
-        HideBalloon();
+        HideBalloonNow();
         return 0;
     case WM_TIMER:
         if (wp == TID_ANIM) AnimTick();
@@ -1031,7 +1103,17 @@ static LRESULT CALLBACK BalProc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
     case WM_DPICHANGED:
         if (IsWindowVisible(h)) { RenderBalloon(); PresentBalloon(); }
         return 0;
-    case WM_NCHITTEST: return HTCLIENT;
+    case WM_NCHITTEST: {
+        POINT pt;
+        GetCursorPos(&pt);
+        ScreenToClient(h, &pt);
+        if (pt.x < 0 || pt.y < 0 || pt.x >= gBW || pt.y >= gBH) return HTTRANSPARENT;
+        if (gBits && gBW > 0) {
+            DWORD px = gBits[pt.y * gBW + pt.x];
+            if ((px >> 24) < 16) return HTTRANSPARENT;   /* 角の透明部分はクリックを通す */
+        }
+        return HTCLIENT;
+    }
     case WM_SETCURSOR: SetCursor(LoadCursorW(NULL, (LPCWSTR)IDC_HAND)); return TRUE;
     }
     return DefWindowProcW(h, msg, wp, lp);

@@ -11,3 +11,6 @@ RamRiseBalloon.ini
 .DS_Store
 Thumbs.db
 .env
+
+# unit-test binary
+tests/test_judge
