@@ -1,4 +1,4 @@
-# RamRiseBalloon (ram-rise-balloon) v0.3.0
+# RamRiseBalloon (ram-rise-balloon) v0.3.1
 
 > **このアカウントについて / About this account**
 > このリポジトリは、AIアシスタントGrok Botが人間の管理者のもとで自律的に運用しているアカウント（zmlworks）が作成・管理しています。コード・説明文は AI が作成しました。
@@ -39,12 +39,40 @@ Windows の **メモリ圧縮** の量も監視し、圧縮が増えていると
 
 | 行 | 内容 |
 |---|---|
-| 使用中（大） | `▲13.3 / 32.0 GB` と使用率 %。**増加中のときだけ** 先頭に `▲` が付き、`▲13.3` の部分がオレンジになります（` / 32.0 GB` は通常の色）。**急減中のときだけ** 先頭に `▼` が付き、`▼13.3` の部分が水色になります。どちらでもない表示中（`HoldSec`）や、圧縮の増加だけで出ているときは矢印なし・通常の色です |
-| 含圧縮（大） | 同じ大きさ・同じ形で、使用中に **圧縮の節約分** を足した合計（右端に灰色の「含圧縮」と %）。▲ / ▼ の色分けは、この合計の増減で判定します。バルーンを出すかどうかも、この合計で判定します |
-| 増減（5 列） | 1 秒ごと（`SampleMs` ごと）の、含圧縮合計の増減を直近 5 回分。**いちばん新しい値が左端に入り、古い値は毎秒右へ流れます**（右端の最も古い値が押し出される）。例: `+190  +65  +220  +105  +225   MB`（単位 MB は行末にまとめて表示。±1024 MB 以上は `+1.25G`）。各値は等幅の列に左寄せで、1 列目の左端は大きな数字の `▲` と同じ位置。**プラスはオレンジ、マイナスは水色**、`0` は通常の色。起動直後などでまだ無い分は右側に `–` |
+| 使用中（大） | `▲13.3 / 32.0 GB` と使用率 %。**増加中のときだけ** 先頭に `▲` が付き、`▲13.3` の部分がオレンジになります（` / 32.0 GB` は通常の色）。**急減中のときだけ** 先頭に `▼` が付き、`▼13.3` の部分が水色になります。どちらでもない表示中（`HoldSec`）や、圧縮の増加だけで出ているときは矢印なし・通常の色です。右端の % は使用率に応じて色が変わり、90% 以上で紫になります（後述） |
+| 含圧縮（大） | 同じ大きさ・同じ形で、使用中に **圧縮の節約分** を足した合計（右端に灰色の「含圧縮」と、使用中と同じ段階色の %）。▲ / ▼ の色分けは、この合計の増減で判定します。バルーンを出すかどうかも、この合計で判定します |
+| 増減（5 列） | 1 秒ごと（`SampleMs` ごと）の、含圧縮合計の増減を直近 5 回分。**いちばん新しい値が左端に入り、古い値は毎秒右へ流れます**（右端の最も古い値が押し出される）。例: `+190  +65  +220  +105  +225   MB`（単位 MB は行末にまとめて表示。±1024 MB 以上は `+1.25G`）。各値は等幅の列に左寄せで、1 列目の左端は大きな数字の `▲` と同じ位置。**`0` は白**。プラスは緑→黄→橙→赤→マゼンタ→紫（大きな変動ほど暖色・紫へ）、マイナスは薄いシアン→明るい青→青→濃い青。起動直後などでまだ無い分は右側に `–` |
 | 圧縮 | **左端**に窓の間（`WindowSec`）の増減を固定幅の枠で表示: 圧縮が増加中は `▲70 MB`、それ以外のプラスは `+70 MB`（どちらもオレンジ）、マイナス・`±0 MB` は灰色。その右に圧縮ストアの物理メモリ量（取得できれば「元 約 X GB」= 圧縮前のデータ量の推定）。圧縮が増加中は本文が黄色。取得できなければ `n/a` |
 | コミット | コミット済み / コミット上限（左の枠は空けて本文の位置をそろえる） |
 | 増加最大 | 左の枠に増加量（例 `+525 MB`）、その右に窓の間にいちばん増えたプロセス（プライベート ワーキングセット） |
+
+## 増減と使用率の色
+
+気象庁の降水強度の配色を参考にしています。閾値は `RiseMB`（既定 50 MB。以下 R）に比例するので、判定を厳しく／緩くすると色の段階もそれに合わせます。`0` と判定する幅（0.5 MB 未満）だけは固定です。
+
+いちばん濃い青は、本来の紺にすると暗い背景（`#202227`）の上で読みにくいため、少し明るいインディゴにしています。紫も同様に少し明るくしています。`▲` / `▼` 本体のオレンジと水色は、これまでどおりです。
+
+| 1 秒あたりの増減の大きさ（既定 R=50 のとき） | プラス | マイナス |
+|---|---|---|
+| 0.5 MB 未満 | 白 `#ECEEF1` | 白 `#ECEEF1` |
+| 0.5 MB 以上、R/5（10 MB）未満 | 緑 `#3CE63C` | 薄いシアン `#B0F2FF` |
+| R/5 以上、R/2（25 MB）未満 | 黄 `#F0E628` | 明るい青 `#6AB4FF` |
+| R/2 以上、R（50 MB）未満 | 橙 `#FF9A20` | 青 `#4A7CFF` |
+| R 以上、2R（100 MB）未満 | 赤 `#FF3A3A` | 青 `#4A7CFF` |
+| 2R 以上、3R（150 MB）未満 | マゼンタ `#FF4AE6` | 濃い青 `#6A66FF` |
+| 3R 以上 | 紫 `#C45CFF` | 濃い青 `#6A66FF` |
+
+右端の使用率 %（使用中・含圧縮の両方。表示の四捨五入と同じ）:
+
+| 使用率 | 色 |
+|---|---|
+| 50% 未満 | 白 |
+| 50% 以上 | 緑 |
+| 60% 以上 | 黄 |
+| 70% 以上 | 橙 |
+| 80% 以上 | 赤 |
+| 85% 以上 | マゼンタ |
+| 90% 以上 | 紫 |
 
 ## 「増加中」「急減」の判定
 
@@ -116,15 +144,15 @@ exe と同じフォルダーに作ります（書き込めない場所なら `%A
     sudo apt install gcc-mingw-w64-x86-64 binutils-mingw-w64-x86-64 zip   # zip が無ければ python3 で作ります
     ./tests/run.sh      # 判定ロジックの単体テスト
     ./build.sh          # → RamRiseBalloon.exe
-    ./build.sh zip      # → ../out/ram-rise-balloon-v0.3.0-win64.zip
+    ./build.sh zip      # → ../out/ram-rise-balloon-v0.3.1-win64.zip
 
 `-Wall -Wextra` で警告ゼロ。アイコンは `res/make_icon.py`（Pillow）で生成した `res/app.ico` を埋め込んでいます。
 
 ## ファイル
 
-- `ramrise.c` 本体 / `judge.h` バルーン判定（単体テストと共有） / `res/app.rc` リソース（アイコン・マニフェスト・バージョン 0.3.0）/ `res/app.manifest` / `res/make_icon.py`
+- `ramrise.c` 本体 / `judge.h` バルーン判定（単体テストと共有） / `res/app.rc` リソース（アイコン・マニフェスト・バージョン 0.3.1）/ `res/app.manifest` / `res/make_icon.py`
 - `tests/run.sh` / `tests/test_judge.c` 増加・急減・含圧縮合計の判定テスト
-- `docs/` バルーンの見本画像（`--demo` 相当のダミー値）
+- `docs/` バルーンの見本画像（上昇・急減・高使用率のダミー値。レイアウト見本: `screenshot.png` / `screenshot-drop.png` / `screenshot-high.png`）
 
 ## 補足
 
@@ -134,6 +162,9 @@ exe と同じフォルダーに作ります（書き込めない場所なら `%A
 
 ## 変更履歴
 
+- **0.3.1** (2026-11-22)
+  - 流れる 5 個の増減を、気象庁の降水強度に近い段階色に変更。0 は白、プラスは緑から紫、マイナスは薄いシアンから濃い青。段階は `RiseMB` に比例
+  - 右端の使用率 % も段階色にし、90% 以上で紫
 - **0.3.0** (2026-11-22)
   - 使用率の青いバーを廃止
   - 使用中と同じ大きさで、圧縮の節約分を足した合計（「含圧縮」）を表示。二重計上を避けるため、使用中に既に含まれる圧縮ストアの物理サイズは足さない
@@ -161,8 +192,8 @@ RamRiseBalloon shows a small dark, non-activating, topmost balloon at the bottom
 (combined usage fell by ≥ 3× `RiseMB`; shown with a teal `▼`), and also when the Windows memory-compression store grows
 (≥ `CompRiseMB`). Combined usage is `used + max(0, original_est − store_working_set)`: `used` (`GlobalMemoryStatusEx` total−available)
 already includes the Memory Compression working set, so only the savings are added, to avoid double-counting.
-It shows `▲used / total GB` and the same-size combined line, the last 5 per-sample (1 s) signed changes of the combined value
-(newest at the left, plus = orange, minus = teal), the compression delta in a fixed left slot, commit charge and the process that grew most.
+It shows `▲used / total GB` and the same-size combined line (usage % turns purple at 90%+), the last 5 per-sample (1 s) signed changes of the combined value
+(newest at the left; 0 = white, plus = green→purple, minus = pale cyan→deep blue, bands scale with `RiseMB`), the compression delta in a fixed left slot, commit charge and the process that grew most.
 A click dismisses the balloon immediately. Compression is read via `NtQuerySystemInformation(SystemStoreInformation)` when elevated,
 otherwise from the working set of the "Memory Compression" process in the process list (no admin, no process handle). Tray menu: pause,
 open INI, start with Windows (HKCU Run), exit. Settings live in `RamRiseBalloon.ini` next to the exe (fallback `%APPDATA%`).

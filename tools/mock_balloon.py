@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Layout mockups of the RamRiseBalloon v0.3.0 popup (not a live Wine capture)."""
+"""Layout mockups of the RamRiseBalloon popup (not a live Wine capture).
+Colour bands stay in sync with judge.h.
+"""
 from __future__ import annotations
 
-import math
 from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
@@ -14,6 +15,22 @@ C_DIM = (0x9A, 0xA1, 0xAC, 255)
 C_RISE = (0xFF, 0x8A, 0x3D, 255)
 C_DROP = (0x3D, 0xC6, 0xE6, 255)
 C_COMP = (0xFF, 0xC1, 0x4D, 255)
+
+# judge.h (0xRRGGBB) -> RGBA
+def _rgba(rgb: int):
+    return ((rgb >> 16) & 255, (rgb >> 8) & 255, rgb & 255, 255)
+
+COL_WHITE = _rgba(0xECEEF1)
+COL_GREEN = _rgba(0x3CE63C)
+COL_YELLOW = _rgba(0xF0E628)
+COL_ORANGE = _rgba(0xFF9A20)
+COL_RED = _rgba(0xFF3A3A)
+COL_MAGENTA = _rgba(0xFF4AE6)
+COL_PURPLE = _rgba(0xC45CFF)
+COL_CYAN = _rgba(0xB0F2FF)
+COL_BLUE_LIGHT = _rgba(0x6AB4FF)
+COL_BLUE = _rgba(0x4A7CFF)
+COL_BLUE_DEEP = _rgba(0x6A66FF)
 
 FONT_REG = "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"
 FONT_BOLD = "/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc"
@@ -69,6 +86,23 @@ def apply_shape(im: Image.Image, radius: float, bw: float) -> None:
             )
 
 
+def percent_color(pct: float):
+    p = int(pct + 0.5)
+    if p >= 90:
+        return COL_PURPLE
+    if p >= 85:
+        return COL_MAGENTA
+    if p >= 80:
+        return COL_RED
+    if p >= 70:
+        return COL_ORANGE
+    if p >= 60:
+        return COL_YELLOW
+    if p >= 50:
+        return COL_GREEN
+    return COL_WHITE
+
+
 def draw_usage(draw, pad, y, iw, big_h, f_big, f_small, rise, drop, val, total, tag):
     arrow = "▲" if rise else "▼" if drop else ""
     c = C_RISE if rise else C_DROP if drop else C_TEXT
@@ -78,9 +112,10 @@ def draw_usage(draw, pad, y, iw, big_h, f_big, f_small, rise, drop, val, total, 
     x = pad + text_w(draw, f_big, head)
     rest = f" / {total:.1f} GB"
     draw.text((x, ty), rest, font=f_big, fill=C_TEXT)
-    pct = f"{val * 100.0 / total:.0f}%"
+    pctv = val * 100.0 / total if total else 0
+    pct = f"{pctv:.0f}%"
     pw = text_w(draw, f_big, pct)
-    draw.text((pad + iw - pw, ty), pct, font=f_big, fill=C_TEXT)
+    draw.text((pad + iw - pw, ty), pct, font=f_big, fill=percent_color(pctv))
     if tag:
         lab = tag + "  "
         tw = text_w(draw, f_small, lab)
@@ -94,7 +129,7 @@ def render(kind: str, dpi: int) -> Image.Image:
     big_h = muldiv(32, dpi)
     d_h = muldiv(22, dpi)
     w = muldiv(330, dpi)
-    show_top = kind == "rise"
+    show_top = kind != "drop"
     lines = 3 if show_top else 2
     h = pad - muldiv(2, dpi) + big_h + big_h + d_h + muldiv(10, dpi) + lines * lh + pad - muldiv(4, dpi)
 
@@ -106,22 +141,31 @@ def render(kind: str, dpi: int) -> Image.Image:
 
     if kind == "rise":
         used, comb, total = 13.0, 14.7, 32.0
-        steps = [("+65", C_RISE), ("+220", C_RISE), ("+105", C_RISE), ("+225", C_RISE), ("+110", C_RISE)]
+        steps = [("+180", COL_PURPLE), ("+70", COL_RED), ("+30", COL_ORANGE), ("+12", COL_YELLOW), ("+4", COL_GREEN)]
         used_rise, used_drop = True, False
         comb_rise, comb_drop = True, False
         comp_delta, comp_rise = "▲70 MB", True
         comp_body = "圧縮: 889 MB（元 約 2.52 GB）"
         commit = "コミット: 19.1 / 40.0 GB"
         top_delta, top_name = "+525 MB", "増加最大: chrome.exe"
-    else:
+    elif kind == "drop":
         used, comb, total = 12.1, 13.8, 32.0
-        steps = [("-200", C_DROP), ("-195", C_DROP), ("-210", C_DROP), ("-188", C_DROP), ("-205", C_DROP)]
+        steps = [("-200", COL_BLUE_DEEP), ("-80", COL_BLUE), ("-40", COL_BLUE), ("-18", COL_BLUE_LIGHT), ("-5", COL_CYAN)]
         used_rise, used_drop = False, True
         comb_rise, comb_drop = False, True
         comp_delta, comp_rise = "±0 MB", False
         comp_body = "圧縮: 889 MB（元 約 2.52 GB）"
         commit = "コミット: 16.9 / 40.0 GB"
         top_delta, top_name = None, None
+    else:
+        used, comb, total = 29.1, 30.5, 32.0
+        steps = [("+120", COL_MAGENTA), ("+55", COL_RED), ("0", COL_WHITE), ("+8", COL_GREEN), ("+22", COL_YELLOW)]
+        used_rise, used_drop = True, False
+        comb_rise, comb_drop = True, False
+        comp_delta, comp_rise = "▲40 MB", True
+        comp_body = "圧縮: 1.10 GB（元 約 3.20 GB）"
+        commit = "コミット: 34.2 / 40.0 GB"
+        top_delta, top_name = "+410 MB", "増加最大: chrome.exe"
 
     iw = w - 2 * pad
     y = pad - muldiv(2, dpi)
@@ -169,19 +213,23 @@ def on_canvas(balloon: Image.Image, dpi: int) -> Image.Image:
 def main() -> None:
     here = Path(__file__).resolve().parents[1]
     docs = here / "docs"
-    out = Path("/workspace/out/ram-rise-balloon-0.3.0")
+    out = Path("/workspace/out/ram-rise-balloon-0.3.1")
     out.mkdir(parents=True, exist_ok=True)
-    for kind in ("rise", "drop"):
+    docs_map = {
+        ("rise", 96): "screenshot.png",
+        ("rise", 144): "screenshot-144dpi.png",
+        ("drop", 96): "screenshot-drop.png",
+        ("high", 96): "screenshot-high.png",
+    }
+    for kind in ("rise", "drop", "high"):
         for dpi, suffix in ((96, ""), (144, "-144dpi")):
             im = render(kind, dpi)
             framed = on_canvas(im, dpi)
             name = f"balloon-{kind}{suffix}.png"
             framed.save(out / name, optimize=True)
-            if kind == "rise":
-                docs_name = "screenshot.png" if dpi == 96 else "screenshot-144dpi.png"
+            docs_name = docs_map.get((kind, dpi))
+            if docs_name:
                 framed.save(docs / docs_name, optimize=True)
-            if kind == "drop" and dpi == 96:
-                framed.save(docs / "screenshot-drop.png", optimize=True)
             print("wrote", out / name, framed.size)
     print("docs updated")
 

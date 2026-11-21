@@ -123,6 +123,59 @@ int main(void)
     judge(-200, -50, 50, 1, 30, 20, 40, 0, &j);
     EQ(j.drop, 1); EQ(j.comp_rise, 1); EQ(j.active, 1);
 
+    /* Colour bands: per-second deltas scale with RiseMB (default 50). */
+    EQ(RrDeltaColor(0, 50), RR_COL_WHITE);
+    EQ(RrDeltaColor(0.4 * RR_MB, 50), RR_COL_WHITE);
+    EQ(RrDeltaColor(-0.4 * RR_MB, 50), RR_COL_WHITE);
+    EQ(RrDeltaColor(0.5 * RR_MB, 50), RR_COL_GREEN);
+    EQ(RrDeltaColor(9.9 * RR_MB, 50), RR_COL_GREEN);
+    EQ(RrDeltaColor(10 * RR_MB, 50), RR_COL_YELLOW);    /* R/5 */
+    EQ(RrDeltaColor(24.9 * RR_MB, 50), RR_COL_YELLOW);
+    EQ(RrDeltaColor(25 * RR_MB, 50), RR_COL_ORANGE);    /* R/2 */
+    EQ(RrDeltaColor(49.9 * RR_MB, 50), RR_COL_ORANGE);
+    EQ(RrDeltaColor(50 * RR_MB, 50), RR_COL_RED);       /* R */
+    EQ(RrDeltaColor(99.9 * RR_MB, 50), RR_COL_RED);
+    EQ(RrDeltaColor(100 * RR_MB, 50), RR_COL_MAGENTA);  /* 2R */
+    EQ(RrDeltaColor(149.9 * RR_MB, 50), RR_COL_MAGENTA);
+    EQ(RrDeltaColor(150 * RR_MB, 50), RR_COL_PURPLE);   /* 3R */
+    EQ(RrDeltaColor(2000 * RR_MB, 50), RR_COL_PURPLE);
+
+    EQ(RrDeltaColor(-0.5 * RR_MB, 50), RR_COL_CYAN);
+    EQ(RrDeltaColor(-9.9 * RR_MB, 50), RR_COL_CYAN);
+    EQ(RrDeltaColor(-10 * RR_MB, 50), RR_COL_BLUE_LIGHT);
+    EQ(RrDeltaColor(-24.9 * RR_MB, 50), RR_COL_BLUE_LIGHT);
+    EQ(RrDeltaColor(-25 * RR_MB, 50), RR_COL_BLUE);
+    EQ(RrDeltaColor(-99.9 * RR_MB, 50), RR_COL_BLUE);
+    EQ(RrDeltaColor(-100 * RR_MB, 50), RR_COL_BLUE_DEEP);
+    EQ(RrDeltaColor(-150 * RR_MB, 50), RR_COL_BLUE_DEEP);
+
+    /* Bands follow RiseMB (here 100: R/5=20, 3R=300). Epsilon stays 0.5 MB. */
+    EQ(RrDeltaColor(0.4 * RR_MB, 100), RR_COL_WHITE);
+    EQ(RrDeltaColor(19.9 * RR_MB, 100), RR_COL_GREEN);
+    EQ(RrDeltaColor(20 * RR_MB, 100), RR_COL_YELLOW);
+    EQ(RrDeltaColor(50 * RR_MB, 100), RR_COL_ORANGE);
+    EQ(RrDeltaColor(100 * RR_MB, 100), RR_COL_RED);
+    EQ(RrDeltaColor(200 * RR_MB, 100), RR_COL_MAGENTA);
+    EQ(RrDeltaColor(300 * RR_MB, 100), RR_COL_PURPLE);
+    EQ(RrDeltaColor(-20 * RR_MB, 100), RR_COL_BLUE_LIGHT);
+    EQ(RrDeltaColor(-50 * RR_MB, 100), RR_COL_BLUE);
+    EQ(RrDeltaColor(-200 * RR_MB, 100), RR_COL_BLUE_DEEP);
+
+    /* Usage % (rounded like %.0f). */
+    EQ(RrPercentColor(0), RR_COL_WHITE);
+    EQ(RrPercentColor(49.4), RR_COL_WHITE);
+    EQ(RrPercentColor(49.5), RR_COL_GREEN);   /* displays as 50% */
+    EQ(RrPercentColor(59.4), RR_COL_GREEN);
+    EQ(RrPercentColor(59.5), RR_COL_YELLOW);
+    EQ(RrPercentColor(69.5), RR_COL_ORANGE);
+    EQ(RrPercentColor(79.5), RR_COL_RED);
+    EQ(RrPercentColor(84.4), RR_COL_RED);
+    EQ(RrPercentColor(84.5), RR_COL_MAGENTA);
+    EQ(RrPercentColor(89.4), RR_COL_MAGENTA);
+    EQ(RrPercentColor(89.5), RR_COL_PURPLE);
+    EQ(RrPercentColor(90), RR_COL_PURPLE);
+    EQ(RrPercentColor(110), RR_COL_PURPLE);
+
     if (fails) {
         printf("%d failed / %d checks\n", fails, n);
         return 1;

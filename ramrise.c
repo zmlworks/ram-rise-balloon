@@ -1,5 +1,5 @@
 /*
- * RamRiseBalloon (ram-rise-balloon) v0.3.0
+ * RamRiseBalloon (ram-rise-balloon) v0.3.1
  * RAM 使用量（圧縮分を足した合計）が増えている間、または急に減ったときに、
  * 画面右下に使用量のバルーンを出す常駐アプリ (Windows 10/11 x64)。
  * メモリ圧縮 (Memory Compression) の量も監視し、圧縮が増えているときもバルーンを出す。
@@ -22,7 +22,7 @@
 
 #define APP_NAME     L"RamRiseBalloon"
 #define APP_TITLE    L"RAM 上昇バルーン"
-#define APP_VER      L"0.3.0"
+#define APP_VER      L"0.3.1"
 #define INI_NAME     L"RamRiseBalloon.ini"
 #define MUTEX_NAME   L"Local\\zmlworks.RamRiseBalloon"
 #define RUN_KEY      L"Software\\Microsoft\\Windows\\CurrentVersion\\Run"
@@ -539,6 +539,11 @@ static void MakeFonts(UINT dpi)
 #define C_DROP    RGB(0x3D, 0xC6, 0xE6)
 #define C_COMP    RGB(0xFF, 0xC1, 0x4D)
 
+static COLORREF RrWinColor(unsigned rgb)
+{
+    return RGB((rgb >> 16) & 0xFF, (rgb >> 8) & 0xFF, rgb & 0xFF);
+}
+
 static void Text(HDC dc, HFONT f, COLORREF c, int x, int y, int w, int h, UINT fmt, const wchar_t *s)
 {
     RECT r;
@@ -634,17 +639,21 @@ static void DrawUsageLine(HDC dc, int pad, int y, int iw, int bigH,
     x += TextW(dc, gFBig, b1);
     _snwprintf(rest, 64, L" / %.1f GB", total / GB); rest[63] = 0;
     Text(dc, gFBig, C_TEXT, x, y, iw - (x - pad), bigH, DT_LEFT | DT_VCENTER, rest);
-    if (tag && tag[0]) {
-        wchar_t pct[32];
-        int tw;
-        _snwprintf(pct, 32, L"%.0f%%", total > 0 ? val * 100.0 / total : 0); pct[31] = 0;
-        tw = TextW(dc, gFBig, pct);
-        Text(dc, gFBig, C_TEXT, pad, y, iw, bigH, DT_RIGHT | DT_VCENTER, pct);
-        _snwprintf(right, 80, L"%ls  ", tag); right[79] = 0;
-        Text(dc, gFSmall, C_DIM, pad, y, iw - tw, bigH, DT_RIGHT | DT_VCENTER, right);
-    } else {
-        _snwprintf(right, 80, L"%.0f%%", total > 0 ? val * 100.0 / total : 0); right[79] = 0;
-        Text(dc, gFBig, C_TEXT, pad, y, iw, bigH, DT_RIGHT | DT_VCENTER, right);
+    {
+        double pctv = total > 0 ? val * 100.0 / total : 0;
+        COLORREF pctC = RrWinColor(RrPercentColor(pctv));
+        if (tag && tag[0]) {
+            wchar_t pct[32];
+            int tw;
+            _snwprintf(pct, 32, L"%.0f%%", pctv); pct[31] = 0;
+            tw = TextW(dc, gFBig, pct);
+            Text(dc, gFBig, pctC, pad, y, iw, bigH, DT_RIGHT | DT_VCENTER, pct);
+            _snwprintf(right, 80, L"%ls  ", tag); right[79] = 0;
+            Text(dc, gFSmall, C_DIM, pad, y, iw - tw, bigH, DT_RIGHT | DT_VCENTER, right);
+        } else {
+            _snwprintf(right, 80, L"%.0f%%", pctv); right[79] = 0;
+            Text(dc, gFBig, pctC, pad, y, iw, bigH, DT_RIGHT | DT_VCENTER, right);
+        }
     }
 }
 
@@ -696,7 +705,7 @@ static void RenderBalloon(void)
 
     /* 3 行目: 直近 5 回のサンプルの、含圧縮合計の増減。いちばん新しい値が左端に入り、古い値は毎回右へ流れる
        (右端の最も古い値が押し出される)。各列は等幅で左寄せ (1 列目の左端 = 1 行目の▲・圧縮の増減の左端)。
-       プラスはオレンジ、マイナスは水色、0 は通常色。まだ無い分は「–」(右側に出る) */
+       0 は白、プラスは緑→黄→橙→赤→マゼンタ→紫、マイナスは薄いシアン→濃い青。まだ無い分は「–」(右側に出る) */
     {
         int k, cw, unitW = TextW(gMemDC, gFSmall, L"MB"), gap = MulDiv(6, S, 96);
         int avail = iw - (gDemo ? TextW(gMemDC, gFSmall, L"デモ") + gap * 2 : 0);
@@ -707,7 +716,7 @@ static void RenderBalloon(void)
             if (gHistCount > k + 1) {
                 double d = SampleCombined(HistAgo(k)) - SampleCombined(HistAgo(k + 1));
                 FmtStep(b1, 64, d);
-                c = d >= 0.5 * MB ? C_RISE : d <= -0.5 * MB ? C_DROP : C_TEXT;
+                c = RrWinColor(RrDeltaColor(d, gS.riseMB));
             } else {
                 wcscpy(b1, L"–");
             }
@@ -1059,7 +1068,7 @@ static int Dump(const wchar_t *path)
     FILE *f = _wfopen(path, L"wb");
     int i;
     if (!f) return 2;
-    fprintf(f, "RamRiseBalloon 0.3.0 --dump\r\n");
+    fprintf(f, "RamRiseBalloon 0.3.1 --dump\r\n");
     for (i = 0; i < 3; i++) {
         Sample s;
         ProcSnap snap = {0, 0, 0};
