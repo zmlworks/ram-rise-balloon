@@ -1,5 +1,5 @@
 /*
- * RamRiseBalloon (ram-rise-balloon) v0.3.1
+ * RamRiseBalloon (ram-rise-balloon) v0.3.2
  * RAM 使用量（圧縮分を足した合計）が増えている間、または急に減ったときに、
  * 画面右下に使用量のバルーンを出す常駐アプリ (Windows 10/11 x64)。
  * メモリ圧縮 (Memory Compression) の量も監視し、圧縮が増えているときもバルーンを出す。
@@ -22,7 +22,7 @@
 
 #define APP_NAME     L"RamRiseBalloon"
 #define APP_TITLE    L"RAM 上昇バルーン"
-#define APP_VER      L"0.3.1"
+#define APP_VER      L"0.3.2"
 #define INI_NAME     L"RamRiseBalloon.ini"
 #define MUTEX_NAME   L"Local\\zmlworks.RamRiseBalloon"
 #define RUN_KEY      L"Software\\Microsoft\\Windows\\CurrentVersion\\Run"
@@ -625,6 +625,13 @@ static double SampleCombined(const Sample *s)
     return RrCombinedUsed(s->used, s->compOk, s->comp, s->compOrig);
 }
 
+static double SampleCombinedTotal(const Sample *s)
+{
+    return RrCombinedTotal(s->total, s->compOk, s->comp, s->compOrig);
+}
+
+static RrColorStats gCol;
+
 /* 大きな使用量の行: 「▲13.3 / 32.0 GB」と右端の %（tag があれば「含圧縮  44%」）。
    増加中は先頭と数値がオレンジ、急減中は▼と数値が水色。 / total は通常色。 */
 static void DrawUsageLine(HDC dc, int pad, int y, int iw, int bigH,
@@ -641,7 +648,7 @@ static void DrawUsageLine(HDC dc, int pad, int y, int iw, int bigH,
     Text(dc, gFBig, C_TEXT, x, y, iw - (x - pad), bigH, DT_LEFT | DT_VCENTER, rest);
     {
         double pctv = total > 0 ? val * 100.0 / total : 0;
-        COLORREF pctC = RrWinColor(RrPercentColor(pctv));
+        COLORREF pctC = RrWinColor(RrPercentColor(pctv, gCol.pct_thr));
         if (tag && tag[0]) {
             wchar_t pct[32];
             int tw;
@@ -699,8 +706,9 @@ static void RenderBalloon(void)
     DrawUsageLine(gMemDC, pad, y, iw, bigH, gUsedRise, gUsedDrop, s->used, s->total, NULL);
     y += bigH;
 
-    /* 2 行目 (大): 使用中 + 圧縮の節約分（物理サイズは使用中に既に含まれるので足さない） */
-    DrawUsageLine(gMemDC, pad, y, iw, bigH, gCombRise, gCombDrop, SampleCombined(s), s->total, L"含圧縮");
+    /* 2 行目 (大): 使用中 + 節約分。分母も物理合計 + 同じ節約分 */
+    DrawUsageLine(gMemDC, pad, y, iw, bigH, gCombRise, gCombDrop,
+                  SampleCombined(s), SampleCombinedTotal(s), L"含圧縮");
     y += bigH;
 
     /* 3 行目: 直近 5 回のサンプルの、含圧縮合計の増減。いちばん新しい値が左端に入り、古い値は毎回右へ流れる
@@ -716,7 +724,7 @@ static void RenderBalloon(void)
             if (gHistCount > k + 1) {
                 double d = SampleCombined(HistAgo(k)) - SampleCombined(HistAgo(k + 1));
                 FmtStep(b1, 64, d);
-                c = RrWinColor(RrDeltaColor(d, gS.riseMB));
+                c = RrWinColor(RrDeltaColor(d, gS.riseMB, gCol.plus_thr, gCol.minus_thr));
             } else {
                 wcscpy(b1, L"–");
             }
@@ -918,7 +926,21 @@ static void OnSample(void)
     gDeltaUsed = s->used - old->used;
     gDeltaComb = comb - oldComb;
     gDeltaComp = (s->compOk && old->compOk) ? s->comp - old->comp : 0;
-    pct = s->total > 0 ? comb * 100.0 / s->total : 0;
+    {
+        double combTot = SampleCombinedTotal(s);
+        double usedPct = s->total > 0 ? s->used * 100.0 / s->total : 0;
+        double combPct = combTot > 0 ? comb * 100.0 / combTot : 0;
+        if (!gCol.inited) RrStatsInit(&gCol, gS.riseMB);
+        if (gHistCount > 1) {
+            double step = comb - prevComb;
+            if (step >= RR_DELTA_EPS_MB * MB) RrRingPush(&gCol.plus, (float)step);
+            else if (step <= -RR_DELTA_EPS_MB * MB) RrRingPush(&gCol.minus, (float)-step);
+        }
+        RrRingPush(&gCol.pct, (float)usedPct);
+        RrRingPush(&gCol.pct, (float)combPct);
+        RrColorRecompute(&gCol, gS.riseMB);
+        pct = combPct;
+    }
 
     /* 判定は含圧縮の合計。使用中の行の▲/▼だけ、使用中そのものの増減で色を付ける */
     RrJudgeWindow(gHistCount, gWinSamples, gDeltaComb, comb - prevComb,
@@ -981,9 +1003,9 @@ static void UpdateTray(void)
     else if (!s) _snwprintf(tip, 128, L"%ls", APP_TITLE);
     else {
         if (s->compOk) FmtSize(c, 64, s->comp, 0); else wcscpy(c, L"n/a");
-        _snwprintf(tip, 128, L"%ls\nRAM %.0f%%（%.1f / %.1f GB）\n含圧縮 %.1f GB\n圧縮 %ls", APP_TITLE,
+        _snwprintf(tip, 128, L"%ls\nRAM %.0f%%（%.1f / %.1f GB）\n含圧縮 %.1f / %.1f GB\n圧縮 %ls", APP_TITLE,
                    s->total > 0 ? s->used * 100.0 / s->total : 0.0, s->used / GB, s->total / GB,
-                   SampleCombined(s) / GB, c);
+                   SampleCombined(s) / GB, SampleCombinedTotal(s) / GB, c);
     }
     tip[127] = 0;
     if (wcscmp(tip, gNid.szTip)) {
@@ -1068,7 +1090,7 @@ static int Dump(const wchar_t *path)
     FILE *f = _wfopen(path, L"wb");
     int i;
     if (!f) return 2;
-    fprintf(f, "RamRiseBalloon 0.3.1 --dump\r\n");
+    fprintf(f, "RamRiseBalloon 0.3.2 --dump\r\n");
     for (i = 0; i < 3; i++) {
         Sample s;
         ProcSnap snap = {0, 0, 0};
@@ -1076,8 +1098,9 @@ static int Dump(const wchar_t *path)
         int store = QueryStore(&ci);
         if (i) Sleep(1000);
         TakeSample(&s, &snap);
-        fprintf(f, "sample %d: used=%.1f MB combined=%.1f MB total=%.1f MB commit=%.1f/%.1f MB procs=%d\r\n", i,
-                s.used / MB, SampleCombined(&s) / MB, s.total / MB, s.commit / MB, s.commitLimit / MB, snap.n);
+        fprintf(f, "sample %d: used=%.1f MB combined=%.1f/%.1f MB total=%.1f MB commit=%.1f/%.1f MB procs=%d\r\n", i,
+                s.used / MB, SampleCombined(&s) / MB, SampleCombinedTotal(&s) / MB, s.total / MB,
+                s.commit / MB, s.commitLimit / MB, snap.n);
         fprintf(f, "  store query: %s (pid=%lu ws=%lu data=%.1f MB compressed=%.1f MB)\r\n",
                 store ? "ok" : "failed", store ? ci.CompressionPid : 0UL, store ? ci.WorkingSetSize : 0UL,
                 store ? (double)ci.TotalDataCompressed / MB : 0.0, store ? (double)ci.TotalCompressedSize / MB : 0.0);

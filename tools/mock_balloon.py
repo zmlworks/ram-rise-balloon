@@ -140,7 +140,7 @@ def render(kind: str, dpi: int) -> Image.Image:
     f_big = font(FONT_BOLD, muldiv(22, dpi))
 
     if kind == "rise":
-        used, comb, total = 13.0, 14.7, 32.0
+        used, comb, utotal, ctotal = 13.0, 14.7, 32.0, 33.7
         steps = [("+180", COL_PURPLE), ("+70", COL_RED), ("+30", COL_ORANGE), ("+12", COL_YELLOW), ("+4", COL_GREEN)]
         used_rise, used_drop = True, False
         comb_rise, comb_drop = True, False
@@ -149,7 +149,7 @@ def render(kind: str, dpi: int) -> Image.Image:
         commit = "コミット: 19.1 / 40.0 GB"
         top_delta, top_name = "+525 MB", "増加最大: chrome.exe"
     elif kind == "drop":
-        used, comb, total = 12.1, 13.8, 32.0
+        used, comb, utotal, ctotal = 12.1, 13.8, 32.0, 33.7
         steps = [("-200", COL_BLUE_DEEP), ("-80", COL_BLUE), ("-40", COL_BLUE), ("-18", COL_BLUE_LIGHT), ("-5", COL_CYAN)]
         used_rise, used_drop = False, True
         comb_rise, comb_drop = False, True
@@ -158,7 +158,7 @@ def render(kind: str, dpi: int) -> Image.Image:
         commit = "コミット: 16.9 / 40.0 GB"
         top_delta, top_name = None, None
     else:
-        used, comb, total = 29.1, 30.5, 32.0
+        used, comb, utotal, ctotal = 29.1, 30.5, 32.0, 33.4
         steps = [("+120", COL_MAGENTA), ("+55", COL_RED), ("0", COL_WHITE), ("+8", COL_GREEN), ("+22", COL_YELLOW)]
         used_rise, used_drop = True, False
         comb_rise, comb_drop = True, False
@@ -169,9 +169,9 @@ def render(kind: str, dpi: int) -> Image.Image:
 
     iw = w - 2 * pad
     y = pad - muldiv(2, dpi)
-    draw_usage(draw, pad, y, iw, big_h, f_big, f_small, used_rise, used_drop, used, total, None)
+    draw_usage(draw, pad, y, iw, big_h, f_big, f_small, used_rise, used_drop, used, utotal, None)
     y += big_h
-    draw_usage(draw, pad, y, iw, big_h, f_big, f_small, comb_rise, comb_drop, comb, total, "含圧縮")
+    draw_usage(draw, pad, y, iw, big_h, f_big, f_small, comb_rise, comb_drop, comb, ctotal, "含圧縮")
     y += big_h
 
     unit_w = text_w(draw, f_small, "MB")
@@ -213,7 +213,7 @@ def on_canvas(balloon: Image.Image, dpi: int) -> Image.Image:
 def main() -> None:
     here = Path(__file__).resolve().parents[1]
     docs = here / "docs"
-    out = Path("/workspace/out/ram-rise-balloon-0.3.1")
+    out = Path("/workspace/out/ram-rise-balloon-0.3.2")
     out.mkdir(parents=True, exist_ok=True)
     docs_map = {
         ("rise", 96): "screenshot.png",

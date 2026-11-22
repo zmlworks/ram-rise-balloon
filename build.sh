@@ -4,7 +4,7 @@
 #   ./build.sh zip    -> also out/ram-rise-balloon-vX.Y.Z-win64.zip (exe + README.md + LICENSE)
 set -eu
 cd "$(dirname "$0")"
-VER=0.3.1
+VER=0.3.2
 CC=${CC:-x86_64-w64-mingw32-gcc}
 WINDRES=${WINDRES:-x86_64-w64-mingw32-windres}
 ( cd res && $WINDRES -O coff -i app.rc -o ../app.res.o )

@@ -124,57 +124,150 @@ int main(void)
     EQ(j.drop, 1); EQ(j.comp_rise, 1); EQ(j.active, 1);
 
     /* Colour bands: per-second deltas scale with RiseMB (default 50). */
-    EQ(RrDeltaColor(0, 50), RR_COL_WHITE);
-    EQ(RrDeltaColor(0.4 * RR_MB, 50), RR_COL_WHITE);
-    EQ(RrDeltaColor(-0.4 * RR_MB, 50), RR_COL_WHITE);
-    EQ(RrDeltaColor(0.5 * RR_MB, 50), RR_COL_GREEN);
-    EQ(RrDeltaColor(9.9 * RR_MB, 50), RR_COL_GREEN);
-    EQ(RrDeltaColor(10 * RR_MB, 50), RR_COL_YELLOW);    /* R/5 */
-    EQ(RrDeltaColor(24.9 * RR_MB, 50), RR_COL_YELLOW);
-    EQ(RrDeltaColor(25 * RR_MB, 50), RR_COL_ORANGE);    /* R/2 */
-    EQ(RrDeltaColor(49.9 * RR_MB, 50), RR_COL_ORANGE);
-    EQ(RrDeltaColor(50 * RR_MB, 50), RR_COL_RED);       /* R */
-    EQ(RrDeltaColor(99.9 * RR_MB, 50), RR_COL_RED);
-    EQ(RrDeltaColor(100 * RR_MB, 50), RR_COL_MAGENTA);  /* 2R */
-    EQ(RrDeltaColor(149.9 * RR_MB, 50), RR_COL_MAGENTA);
-    EQ(RrDeltaColor(150 * RR_MB, 50), RR_COL_PURPLE);   /* 3R */
-    EQ(RrDeltaColor(2000 * RR_MB, 50), RR_COL_PURPLE);
+    EQ(RrDeltaColor(0, 50, NULL, NULL), RR_COL_WHITE);
+    EQ(RrDeltaColor(0.4 * RR_MB, 50, NULL, NULL), RR_COL_WHITE);
+    EQ(RrDeltaColor(-0.4 * RR_MB, 50, NULL, NULL), RR_COL_WHITE);
+    EQ(RrDeltaColor(0.5 * RR_MB, 50, NULL, NULL), RR_COL_GREEN);
+    EQ(RrDeltaColor(9.9 * RR_MB, 50, NULL, NULL), RR_COL_GREEN);
+    EQ(RrDeltaColor(10 * RR_MB, 50, NULL, NULL), RR_COL_YELLOW);    /* R/5 */
+    EQ(RrDeltaColor(24.9 * RR_MB, 50, NULL, NULL), RR_COL_YELLOW);
+    EQ(RrDeltaColor(25 * RR_MB, 50, NULL, NULL), RR_COL_ORANGE);    /* R/2 */
+    EQ(RrDeltaColor(49.9 * RR_MB, 50, NULL, NULL), RR_COL_ORANGE);
+    EQ(RrDeltaColor(50 * RR_MB, 50, NULL, NULL), RR_COL_RED);       /* R */
+    EQ(RrDeltaColor(99.9 * RR_MB, 50, NULL, NULL), RR_COL_RED);
+    EQ(RrDeltaColor(100 * RR_MB, 50, NULL, NULL), RR_COL_MAGENTA);  /* 2R */
+    EQ(RrDeltaColor(149.9 * RR_MB, 50, NULL, NULL), RR_COL_MAGENTA);
+    EQ(RrDeltaColor(150 * RR_MB, 50, NULL, NULL), RR_COL_PURPLE);   /* 3R */
+    EQ(RrDeltaColor(2000 * RR_MB, 50, NULL, NULL), RR_COL_PURPLE);
 
-    EQ(RrDeltaColor(-0.5 * RR_MB, 50), RR_COL_CYAN);
-    EQ(RrDeltaColor(-9.9 * RR_MB, 50), RR_COL_CYAN);
-    EQ(RrDeltaColor(-10 * RR_MB, 50), RR_COL_BLUE_LIGHT);
-    EQ(RrDeltaColor(-24.9 * RR_MB, 50), RR_COL_BLUE_LIGHT);
-    EQ(RrDeltaColor(-25 * RR_MB, 50), RR_COL_BLUE);
-    EQ(RrDeltaColor(-99.9 * RR_MB, 50), RR_COL_BLUE);
-    EQ(RrDeltaColor(-100 * RR_MB, 50), RR_COL_BLUE_DEEP);
-    EQ(RrDeltaColor(-150 * RR_MB, 50), RR_COL_BLUE_DEEP);
+    EQ(RrDeltaColor(-0.5 * RR_MB, 50, NULL, NULL), RR_COL_CYAN);
+    EQ(RrDeltaColor(-9.9 * RR_MB, 50, NULL, NULL), RR_COL_CYAN);
+    EQ(RrDeltaColor(-10 * RR_MB, 50, NULL, NULL), RR_COL_BLUE_LIGHT);
+    EQ(RrDeltaColor(-24.9 * RR_MB, 50, NULL, NULL), RR_COL_BLUE_LIGHT);
+    EQ(RrDeltaColor(-25 * RR_MB, 50, NULL, NULL), RR_COL_BLUE);
+    EQ(RrDeltaColor(-99.9 * RR_MB, 50, NULL, NULL), RR_COL_BLUE);
+    EQ(RrDeltaColor(-100 * RR_MB, 50, NULL, NULL), RR_COL_BLUE_DEEP);
+    EQ(RrDeltaColor(-150 * RR_MB, 50, NULL, NULL), RR_COL_BLUE_DEEP);
 
     /* Bands follow RiseMB (here 100: R/5=20, 3R=300). Epsilon stays 0.5 MB. */
-    EQ(RrDeltaColor(0.4 * RR_MB, 100), RR_COL_WHITE);
-    EQ(RrDeltaColor(19.9 * RR_MB, 100), RR_COL_GREEN);
-    EQ(RrDeltaColor(20 * RR_MB, 100), RR_COL_YELLOW);
-    EQ(RrDeltaColor(50 * RR_MB, 100), RR_COL_ORANGE);
-    EQ(RrDeltaColor(100 * RR_MB, 100), RR_COL_RED);
-    EQ(RrDeltaColor(200 * RR_MB, 100), RR_COL_MAGENTA);
-    EQ(RrDeltaColor(300 * RR_MB, 100), RR_COL_PURPLE);
-    EQ(RrDeltaColor(-20 * RR_MB, 100), RR_COL_BLUE_LIGHT);
-    EQ(RrDeltaColor(-50 * RR_MB, 100), RR_COL_BLUE);
-    EQ(RrDeltaColor(-200 * RR_MB, 100), RR_COL_BLUE_DEEP);
+    EQ(RrDeltaColor(0.4 * RR_MB, 100, NULL, NULL), RR_COL_WHITE);
+    EQ(RrDeltaColor(19.9 * RR_MB, 100, NULL, NULL), RR_COL_GREEN);
+    EQ(RrDeltaColor(20 * RR_MB, 100, NULL, NULL), RR_COL_YELLOW);
+    EQ(RrDeltaColor(50 * RR_MB, 100, NULL, NULL), RR_COL_ORANGE);
+    EQ(RrDeltaColor(100 * RR_MB, 100, NULL, NULL), RR_COL_RED);
+    EQ(RrDeltaColor(200 * RR_MB, 100, NULL, NULL), RR_COL_MAGENTA);
+    EQ(RrDeltaColor(300 * RR_MB, 100, NULL, NULL), RR_COL_PURPLE);
+    EQ(RrDeltaColor(-20 * RR_MB, 100, NULL, NULL), RR_COL_BLUE_LIGHT);
+    EQ(RrDeltaColor(-50 * RR_MB, 100, NULL, NULL), RR_COL_BLUE);
+    EQ(RrDeltaColor(-200 * RR_MB, 100, NULL, NULL), RR_COL_BLUE_DEEP);
 
     /* Usage % (rounded like %.0f). */
-    EQ(RrPercentColor(0), RR_COL_WHITE);
-    EQ(RrPercentColor(49.4), RR_COL_WHITE);
-    EQ(RrPercentColor(49.5), RR_COL_GREEN);   /* displays as 50% */
-    EQ(RrPercentColor(59.4), RR_COL_GREEN);
-    EQ(RrPercentColor(59.5), RR_COL_YELLOW);
-    EQ(RrPercentColor(69.5), RR_COL_ORANGE);
-    EQ(RrPercentColor(79.5), RR_COL_RED);
-    EQ(RrPercentColor(84.4), RR_COL_RED);
-    EQ(RrPercentColor(84.5), RR_COL_MAGENTA);
-    EQ(RrPercentColor(89.4), RR_COL_MAGENTA);
-    EQ(RrPercentColor(89.5), RR_COL_PURPLE);
-    EQ(RrPercentColor(90), RR_COL_PURPLE);
-    EQ(RrPercentColor(110), RR_COL_PURPLE);
+    EQ(RrPercentColor(0, NULL), RR_COL_WHITE);
+    EQ(RrPercentColor(49.4, NULL), RR_COL_WHITE);
+    EQ(RrPercentColor(49.5, NULL), RR_COL_GREEN);   /* displays as 50% */
+    EQ(RrPercentColor(59.4, NULL), RR_COL_GREEN);
+    EQ(RrPercentColor(59.5, NULL), RR_COL_YELLOW);
+    EQ(RrPercentColor(69.5, NULL), RR_COL_ORANGE);
+    EQ(RrPercentColor(79.5, NULL), RR_COL_RED);
+    EQ(RrPercentColor(84.4, NULL), RR_COL_RED);
+    EQ(RrPercentColor(84.5, NULL), RR_COL_MAGENTA);
+    EQ(RrPercentColor(89.4, NULL), RR_COL_MAGENTA);
+    EQ(RrPercentColor(89.5, NULL), RR_COL_PURPLE);
+    EQ(RrPercentColor(90, NULL), RR_COL_PURPLE);
+    EQ(RrPercentColor(110, NULL), RR_COL_PURPLE);
+
+    /* Combined denominator includes the same savings as the numerator. */
+    {
+        double used = 13.0 * GB, total = 32.0 * GB, comp = 0.8 * GB, orig = 2.5 * GB;
+        double gain = orig - comp;
+        APPROX(RrCombinedGain(1, comp, orig), gain, 1.0);
+        APPROX(RrCombinedUsed(used, 1, comp, orig), used + gain, 1.0);
+        APPROX(RrCombinedTotal(total, 1, comp, orig), total + gain, 1.0);
+        /* 14.7 / 33.7 GB, not 14.7 / 32.0 */
+        APPROX(RrCombinedUsed(used, 1, comp, orig) / GB, 13.0 + (2.5 - 0.8), 1e-9);
+        APPROX(RrCombinedTotal(total, 1, comp, orig) / GB, 32.0 + (2.5 - 0.8), 1e-9);
+        APPROX(RrCombinedTotal(total, 0, comp, orig), total, 1.0);
+        APPROX(RrCombinedTotal(total, 1, comp, comp), total, 1.0);
+    }
+
+    /* Colour stats: cold start stays on the fixed defaults. */
+    {
+        RrColorStats st;
+        int i;
+        RrStatsInit(&st, 50);
+        EQ(st.plus.n, 0);
+        APPROX(st.plus_thr[0] / RR_MB, 10.0, 1e-6);
+        APPROX(st.plus_thr[4] / RR_MB, 150.0, 1e-6);
+        APPROX(st.pct_thr[5], 90.0, 1e-6);
+        EQ(RrDeltaColor(12 * RR_MB, 50, st.plus_thr, st.minus_thr), RR_COL_YELLOW);
+        EQ(RrPercentColor(50, st.pct_thr), RR_COL_GREEN);
+        EQ(RrPercentColor(90, st.pct_thr), RR_COL_PURPLE);
+        for (i = 0; i < RR_STAT_WARM - 1; i++)
+            RrRingPush(&st.plus, (float)((i + 1) * 5 * RR_MB));
+        RrColorRecompute(&st, 50);
+        /* not yet warm */
+        APPROX(st.plus_thr[4] / RR_MB, 150.0, 1e-6);
+    }
+
+    /* A wide, even plus distribution moves thresholds toward quantiles,
+       but one recompute only takes a 15% step (no flicker). */
+    {
+        RrColorStats st;
+        int i, k;
+        double before, after;
+        RrStatsInit(&st, 50);
+        for (i = 1; i <= 100; i++)
+            RrRingPush(&st.plus, (float)(i * RR_MB));   /* 1..100 MB, n=100 */
+        before = st.plus_thr[4];
+        RrColorRecompute(&st, 50);
+        after = st.plus_thr[4];
+        /* default 150 MB, target ~95 MB; one step of 15% toward 95 */
+        if (!(after < before && after > 95 * RR_MB)) {
+            fails++; n++;
+            printf("FAIL %s:%d plus_thr[4] did not ease toward quantile (%.1f -> %.1f MB)\n",
+                   __FILE__, __LINE__, before / RR_MB, after / RR_MB);
+        } else {
+            n++;
+        }
+        for (k = 0; k < 40; k++) RrColorRecompute(&st, 50);
+        APPROX(st.plus_thr[0] / RR_MB, 20.0, 3.0);   /* q20 of 1..100 */
+        APPROX(st.plus_thr[4] / RR_MB, 95.0, 3.0);   /* q95 */
+        EQ(RrDeltaColor(0.4 * RR_MB, 50, st.plus_thr, st.minus_thr), RR_COL_WHITE);
+        EQ(RrDeltaColor(15 * RR_MB, 50, st.plus_thr, st.minus_thr), RR_COL_GREEN);
+        EQ(RrDeltaColor(96 * RR_MB, 50, st.plus_thr, st.minus_thr), RR_COL_PURPLE);
+    }
+
+    /* Narrow plus range keeps the defaults (a flat line must not flicker). */
+    {
+        RrColorStats st;
+        int i, k;
+        RrStatsInit(&st, 50);
+        for (i = 0; i < 80; i++)
+            RrRingPush(&st.plus, (float)((10.0 + (i % 2) * 0.2) * RR_MB));
+        for (k = 0; k < 40; k++) RrColorRecompute(&st, 50);
+        APPROX(st.plus_thr[0] / RR_MB, 10.0, 1e-3);
+        APPROX(st.plus_thr[4] / RR_MB, 150.0, 1e-3);
+    }
+
+    /* Percentage quantiles over a 30–70% range; minus similarly. */
+    {
+        RrColorStats st;
+        int i, k;
+        RrStatsInit(&st, 50);
+        for (i = 0; i <= 80; i++)
+            RrRingPush(&st.pct, (float)(30.0 + i * 0.5));   /* 30..70, n=81 */
+        for (i = 1; i <= 80; i++)
+            RrRingPush(&st.minus, (float)(i * RR_MB));      /* 1..80 MB */
+        for (k = 0; k < 40; k++) RrColorRecompute(&st, 50);
+        APPROX(st.pct_thr[0], 34.0, 3.0);    /* q10 of 30..70 */
+        APPROX(st.pct_thr[5], 68.0, 3.0);    /* q95 */
+        EQ(RrPercentColor(30, st.pct_thr), RR_COL_WHITE);
+        EQ(RrPercentColor(69, st.pct_thr), RR_COL_PURPLE);
+        APPROX(st.minus_thr[0] / RR_MB, 20.0, 5.0);  /* q25 of 1..80 */
+        APPROX(st.minus_thr[2] / RR_MB, 72.0, 5.0);  /* q90 */
+        EQ(RrDeltaColor(-2 * RR_MB, 50, st.plus_thr, st.minus_thr), RR_COL_CYAN);
+        EQ(RrDeltaColor(-75 * RR_MB, 50, st.plus_thr, st.minus_thr), RR_COL_BLUE_DEEP);
+    }
 
     if (fails) {
         printf("%d failed / %d checks\n", fails, n);
