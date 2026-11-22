@@ -1,5 +1,5 @@
 /*
- * RamRiseBalloon (ram-rise-balloon) v0.3.2
+ * RamRiseBalloon (ram-rise-balloon) v0.3.3
  * RAM 使用量（圧縮分を足した合計）が増えている間、または急に減ったときに、
  * 画面右下に使用量のバルーンを出す常駐アプリ (Windows 10/11 x64)。
  * メモリ圧縮 (Memory Compression) の量も監視し、圧縮が増えているときもバルーンを出す。
@@ -22,7 +22,7 @@
 
 #define APP_NAME     L"RamRiseBalloon"
 #define APP_TITLE    L"RAM 上昇バルーン"
-#define APP_VER      L"0.3.2"
+#define APP_VER      L"0.3.3"
 #define INI_NAME     L"RamRiseBalloon.ini"
 #define MUTEX_NAME   L"Local\\zmlworks.RamRiseBalloon"
 #define RUN_KEY      L"Software\\Microsoft\\Windows\\CurrentVersion\\Run"
@@ -30,6 +30,7 @@
 #define WM_TRAY      (WM_APP + 1)
 #define TID_SAMPLE   1
 #define TID_ANIM     2
+#define TID_HOVER    3
 #define ID_PEEK      101
 #define ID_PAUSE     102
 #define ID_INI       103
@@ -52,7 +53,6 @@ typedef struct {
     int holdSec;       /* 増加が止まってから消えるまでの秒数 */
     int minPercent;    /* 使用率がこれ未満なら出さない */
     int showTopProcess;
-    int clickThrough;  /* 1 = バルーンをクリック透過 (クリックで閉じられない) */
     int opacity;       /* 0..255 */
     int suppressFullscreen;
 } Settings;
@@ -60,6 +60,7 @@ typedef struct {
 static Settings gS;
 static wchar_t  gIni[MAX_PATH];
 static FILETIME gIniTime;
+static RrColorStats gCol;
 
 static const wchar_t kDefaultIni[] =
     L"; RamRiseBalloon の設定 (保存すると数秒以内に反映されます)\r\n"
@@ -80,12 +81,11 @@ static const wchar_t kDefaultIni[] =
     L"MinPercent=0\r\n"
     L"; いちばん増えたプロセスを表示する (1/0)\r\n"
     L"ShowTopProcess=1\r\n"
-    L"; 1 = バルーンをクリック透過にする (クリックで閉じられなくなる)\r\n"
-    L"ClickThrough=0\r\n"
     L"; 不透明度 (80-255)\r\n"
     L"Opacity=240\r\n"
     L"; 全画面アプリ・プレゼン中は出さない (1/0)\r\n"
-    L"SuppressFullscreen=1\r\n";
+    L"SuppressFullscreen=1\r\n"
+    L"; 色の統計は終了時だけ [stats] の HistPlus / HistMinus / HistPct に保存されます\r\n";
 
 static int Clamp(int v, int lo, int hi) { return v < lo ? lo : v > hi ? hi : v; }
 
@@ -111,10 +111,65 @@ static void LoadSettings(void)
     gS.holdSec = IniInt(L"HoldSec", 3, 0, 600);
     gS.minPercent = IniInt(L"MinPercent", 0, 0, 100);
     gS.showTopProcess = IniInt(L"ShowTopProcess", 1, 0, 1);
-    gS.clickThrough = IniInt(L"ClickThrough", 0, 0, 1);
     gS.opacity = IniInt(L"Opacity", 240, 80, 255);
     gS.suppressFullscreen = IniInt(L"SuppressFullscreen", 1, 0, 1);
     if (!FileTime(gIni, &gIniTime)) memset(&gIniTime, 0, sizeof gIniTime);
+}
+
+/* [stats] の3行。壊れた行は捨てる。起動時だけ呼ぶ（実行中の ini 再読込では色統計を触らない）。 */
+static void LoadColorStats(void)
+{
+    wchar_t wbuf[2048];
+    char buf[2048];
+    unsigned tmpd[RR_HIST_DIFF_BINS], tmpp[RR_HIST_PCT_BINS];
+    int warm = 0;
+    if (!gIni[0]) return;
+    if (GetPrivateProfileStringW(L"stats", L"HistPlus", L"", wbuf, 2048, gIni) > 0) {
+        if (WideCharToMultiByte(CP_UTF8, 0, wbuf, -1, buf, 2048, NULL, NULL) > 0
+            && RrHistParse(buf, tmpd, RR_HIST_DIFF_BINS)) {
+            memcpy(gCol.plus.c, tmpd, sizeof tmpd);
+            gCol.plus.total = (unsigned)RrHistSum(gCol.plus.c, RR_HIST_DIFF_BINS);
+            if (gCol.plus.total >= (unsigned)RR_STAT_WARM) warm = 1;
+        }
+    }
+    if (GetPrivateProfileStringW(L"stats", L"HistMinus", L"", wbuf, 2048, gIni) > 0) {
+        if (WideCharToMultiByte(CP_UTF8, 0, wbuf, -1, buf, 2048, NULL, NULL) > 0
+            && RrHistParse(buf, tmpd, RR_HIST_DIFF_BINS)) {
+            memcpy(gCol.minus.c, tmpd, sizeof tmpd);
+            gCol.minus.total = (unsigned)RrHistSum(gCol.minus.c, RR_HIST_DIFF_BINS);
+            if (gCol.minus.total >= (unsigned)RR_STAT_WARM) warm = 1;
+        }
+    }
+    if (GetPrivateProfileStringW(L"stats", L"HistPct", L"", wbuf, 2048, gIni) > 0) {
+        if (WideCharToMultiByte(CP_UTF8, 0, wbuf, -1, buf, 2048, NULL, NULL) > 0
+            && RrHistParse(buf, tmpp, RR_HIST_PCT_BINS)) {
+            memcpy(gCol.pct.c, tmpp, sizeof tmpp);
+            gCol.pct.total = (unsigned)RrHistSum(gCol.pct.c, RR_HIST_PCT_BINS);
+            if (gCol.pct.total >= (unsigned)RR_STAT_WARM) warm = 1;
+        }
+    }
+    if (warm) {
+        gCol.inited = 0;
+        RrColorRecompute(&gCol, gS.riseMB);
+    }
+}
+
+/* 終了時と WM_ENDSESSION だけ書く。ほかではディスクに触れない。 */
+static void SaveColorStats(void)
+{
+    char buf[2048];
+    wchar_t wbuf[2048];
+    if (!gIni[0]) return;
+    if (RrHistFormat(gCol.plus.c, RR_HIST_DIFF_BINS, buf, 2048)
+        && MultiByteToWideChar(CP_UTF8, 0, buf, -1, wbuf, 2048) > 0)
+        WritePrivateProfileStringW(L"stats", L"HistPlus", wbuf, gIni);
+    if (RrHistFormat(gCol.minus.c, RR_HIST_DIFF_BINS, buf, 2048)
+        && MultiByteToWideChar(CP_UTF8, 0, buf, -1, wbuf, 2048) > 0)
+        WritePrivateProfileStringW(L"stats", L"HistMinus", wbuf, gIni);
+    if (RrHistFormat(gCol.pct.c, RR_HIST_PCT_BINS, buf, 2048)
+        && MultiByteToWideChar(CP_UTF8, 0, buf, -1, wbuf, 2048) > 0)
+        WritePrivateProfileStringW(L"stats", L"HistPct", wbuf, gIni);
+    FileTime(gIni, &gIniTime);
 }
 
 /* 新規作成できたら 1、既にあれば 1、作れなければ 0。UTF-16LE (BOM 付き) で書く。 */
@@ -456,9 +511,9 @@ static int gCompRise;
 static double gDeltaUsed, gDeltaComb, gDeltaComp;
 static int gQuiet;          /* 増減していないサンプルが続いた数 */
 static int gHold;           /* HoldSec をサンプル数にしたもの */
-static int gDismissed;      /* クリックで閉じた → 今回の増減が終わるまで出さない */
 static int gPeek;           /* 手動表示の残りサンプル数 */
 static int gShown;          /* 表示中 (フェードアウト中は 0) */
+static int gHover;          /* カーソルがバルーン矩形の上 */
 
 /* アニメーション */
 static int   gAnimDir;      /* +1 表示中, -1 消去中, 0 停止 */
@@ -538,6 +593,7 @@ static void MakeFonts(UINT dpi)
 #define C_RISE    RGB(0xFF, 0x8A, 0x3D)
 #define C_DROP    RGB(0x3D, 0xC6, 0xE6)
 #define C_COMP    RGB(0xFF, 0xC1, 0x4D)
+#define C_NAME    RGB(0xFF, 0xFF, 0xFF)
 
 static COLORREF RrWinColor(unsigned rgb)
 {
@@ -629,8 +685,6 @@ static double SampleCombinedTotal(const Sample *s)
 {
     return RrCombinedTotal(s->total, s->compOk, s->comp, s->compOrig);
 }
-
-static RrColorStats gCol;
 
 /* 大きな使用量の行: 「▲13.3 / 32.0 GB」と右端の %（tag があれば「含圧縮  44%」）。
    増加中は先頭と数値がオレンジ、急減中は▼と数値が水色。 / total は通常色。 */
@@ -779,8 +833,11 @@ static void RenderBalloon(void)
     if (showTop) {
         FmtSize(b1, 64, gTopDelta, 1);
         Text(gMemDC, gFSmall, C_DIM, pad, y, slotW, lh, DT_LEFT | DT_VCENTER, b1);
-        _snwprintf(line, 200, L"増加最大: %ls", gTopName); line[199] = 0;
-        Text(gMemDC, gFSmall, C_DIM, pad + slotW, y, iw - slotW, lh, DT_LEFT | DT_VCENTER, line);
+        Text(gMemDC, gFSmall, C_DIM, pad + slotW, y, iw - slotW, lh, DT_LEFT | DT_VCENTER, L"増加最大: ");
+        {
+            int lw = TextW(gMemDC, gFSmall, L"増加最大: ");
+            Text(gMemDC, gFHead, C_NAME, pad + slotW + lw, y, iw - slotW - lw, lh, DT_LEFT | DT_VCENTER, gTopName);
+        }
     }
 
     GdiFlush();
@@ -813,7 +870,11 @@ static void PresentBalloon(void)
         if (pt.x < gWork.left) pt.x = gWork.left;
     }
     bf.BlendOp = AC_SRC_OVER; bf.BlendFlags = 0; bf.AlphaFormat = AC_SRC_ALPHA;
-    bf.SourceConstantAlpha = (BYTE)(gS.opacity * (gAnimDir >= 0 ? e : t) + 0.5);
+    {
+        double vis = (gAnimDir >= 0 ? e : t);
+        if (gHover) vis *= 0.20;   /* カーソルが乗っている間は下をクリックできるよう薄くする */
+        bf.SourceConstantAlpha = (BYTE)(gS.opacity * vis + 0.5);
+    }
     UpdateLayeredWindow(gBal, NULL, &pt, &sz, gMemDC, &src, 0, &bf, ULW_ALPHA);
 }
 
@@ -825,11 +886,31 @@ static void StartAnim(int dir)
     SetTimer(gBal, TID_ANIM, 15, NULL);
 }
 
-static void ApplyClickThrough(void)
+static void HoverTick(void)
 {
-    LONG_PTR ex = GetWindowLongPtrW(gBal, GWL_EXSTYLE);
-    LONG_PTR nx = gS.clickThrough ? (ex | WS_EX_TRANSPARENT) : (ex & ~(LONG_PTR)WS_EX_TRANSPARENT);
-    if (nx != ex) SetWindowLongPtrW(gBal, GWL_EXSTYLE, nx);
+    POINT pt;
+    RECT r;
+    int over = 0;
+    if (gBal && IsWindowVisible(gBal)) {
+        GetCursorPos(&pt);
+        GetWindowRect(gBal, &r);
+        over = PtInRect(&r, pt) ? 1 : 0;
+    }
+    if (over != gHover) {
+        gHover = over;
+        if (gBal && IsWindowVisible(gBal)) PresentBalloon();
+    }
+}
+
+static void StartHoverTimer(void)
+{
+    if (gBal) SetTimer(gBal, TID_HOVER, 50, NULL);
+}
+
+static void StopHoverTimer(void)
+{
+    gHover = 0;
+    if (gBal) KillTimer(gBal, TID_HOVER);
 }
 
 static void ShowBalloon(void)
@@ -837,13 +918,13 @@ static void ShowBalloon(void)
     RenderBalloon();
     if (!gShown) {
         gShown = 1;
-        ApplyClickThrough();
         if (!IsWindowVisible(gBal)) {
             gAnimT = 0;
             PresentBalloon();
             SetWindowPos(gBal, HWND_TOPMOST, 0, 0, 0, 0,
                          SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
         }
+        StartHoverTimer();
         StartAnim(+1);
     } else {
         /* 他の最前面ウィンドウの下に潜らないよう、Z 順だけ上げる (アクティブにはしない) */
@@ -859,18 +940,6 @@ static void HideBalloon(void)
     if (IsWindowVisible(gBal)) StartAnim(-1);
 }
 
-/* クリックで閉じるとき: フェードせず即座に消す（出ている間タスクバーが押せなくなることがあるため） */
-static void HideBalloonNow(void)
-{
-    gShown = 0;
-    gAnimDir = 0;
-    gAnimT = 0;
-    if (gBal) {
-        KillTimer(gBal, TID_ANIM);
-        ShowWindow(gBal, SW_HIDE);
-    }
-}
-
 static void AnimTick(void)
 {
     DWORD el = GetTickCount() - gAnimStart;
@@ -882,6 +951,7 @@ static void AnimTick(void)
         gAnimT = 1 - el / 450.0;
         if (gAnimT <= 0) {
             gAnimT = 0; gAnimDir = 0; KillTimer(gBal, TID_ANIM);
+            StopHoverTimer();
             ShowWindow(gBal, SW_HIDE);
             return;
         }
@@ -930,14 +1000,13 @@ static void OnSample(void)
         double combTot = SampleCombinedTotal(s);
         double usedPct = s->total > 0 ? s->used * 100.0 / s->total : 0;
         double combPct = combTot > 0 ? comb * 100.0 / combTot : 0;
-        if (!gCol.inited) RrStatsInit(&gCol, gS.riseMB);
         if (gHistCount > 1) {
             double step = comb - prevComb;
-            if (step >= RR_DELTA_EPS_MB * MB) RrRingPush(&gCol.plus, (float)step);
-            else if (step <= -RR_DELTA_EPS_MB * MB) RrRingPush(&gCol.minus, (float)-step);
+            if (step >= RR_DELTA_EPS_MB * MB) RrHistAddDiff(&gCol.plus, step);
+            else if (step <= -RR_DELTA_EPS_MB * MB) RrHistAddDiff(&gCol.minus, -step);
         }
-        RrRingPush(&gCol.pct, (float)usedPct);
-        RrRingPush(&gCol.pct, (float)combPct);
+        RrHistAddPct(&gCol.pct, usedPct);
+        RrHistAddPct(&gCol.pct, combPct);
         RrColorRecompute(&gCol, gS.riseMB);
         pct = combPct;
     }
@@ -957,12 +1026,11 @@ static void OnSample(void)
 
     hold = gHold = (gS.holdSec * 1000 + gS.sampleMs - 1) / gS.sampleMs;
     if (rising) gQuiet = 0; else gQuiet++;
-    if (gQuiet > hold) gDismissed = 0;   /* 増減が終わった → 次の変化でまた出す */
 
     if (gPeek > 0) gPeek--;
     if ((gS.showTopProcess) && (gShown || rising || gPeek)) FindTopGrower(gWinSamples);
 
-    if ((rising || (gShown && gQuiet <= hold)) && !gDismissed && !FullscreenBusy()) ShowBalloon();
+    if ((rising || (gShown && gQuiet <= hold)) && !FullscreenBusy()) ShowBalloon();
     else if (gPeek > 0) ShowBalloon();
     else HideBalloon();
 
@@ -1077,7 +1145,6 @@ static void RestartSampling(void)
 static void Peek(void)
 {
     if (gPaused || !gHistCount) return;
-    gDismissed = 0;
     gPeek = (gS.holdSec * 1000 + gS.sampleMs - 1) / gS.sampleMs + 3;
     gQuiet = gHold + 1;
     ShowBalloon();
@@ -1090,7 +1157,7 @@ static int Dump(const wchar_t *path)
     FILE *f = _wfopen(path, L"wb");
     int i;
     if (!f) return 2;
-    fprintf(f, "RamRiseBalloon 0.3.2 --dump\r\n");
+    fprintf(f, "RamRiseBalloon 0.3.3 --dump\r\n");
     for (i = 0; i < 3; i++) {
         Sample s;
         ProcSnap snap = {0, 0, 0};
@@ -1121,32 +1188,13 @@ static LRESULT CALLBACK BalProc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
 {
     switch (msg) {
     case WM_MOUSEACTIVATE: return MA_NOACTIVATE;
-    case WM_LBUTTONDOWN:
-    case WM_RBUTTONDOWN:
-    case WM_MBUTTONDOWN:
-    case WM_LBUTTONUP:
-    case WM_RBUTTONUP:
-        gDismissed = 1; gPeek = 0;
-        HideBalloonNow();
-        return 0;
     case WM_TIMER:
         if (wp == TID_ANIM) AnimTick();
+        else if (wp == TID_HOVER) HoverTick();
         return 0;
     case WM_DPICHANGED:
         if (IsWindowVisible(h)) { RenderBalloon(); PresentBalloon(); }
         return 0;
-    case WM_NCHITTEST: {
-        POINT pt;
-        GetCursorPos(&pt);
-        ScreenToClient(h, &pt);
-        if (pt.x < 0 || pt.y < 0 || pt.x >= gBW || pt.y >= gBH) return HTTRANSPARENT;
-        if (gBits && gBW > 0) {
-            DWORD px = gBits[pt.y * gBW + pt.x];
-            if ((px >> 24) < 16) return HTTRANSPARENT;   /* 角の透明部分はクリックを通す */
-        }
-        return HTCLIENT;
-    }
-    case WM_SETCURSOR: SetCursor(LoadCursorW(NULL, (LPCWSTR)IDC_HAND)); return TRUE;
     }
     return DefWindowProcW(h, msg, wp, lp);
 }
@@ -1200,9 +1248,13 @@ static LRESULT CALLBACK MainProc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
         if (msg == WM_DPICHANGED) return 0;
         break;
     case WM_ENDSESSION:
-        if (wp) Shell_NotifyIconW(NIM_DELETE, &gNid);
+        if (wp) {
+            SaveColorStats();
+            Shell_NotifyIconW(NIM_DELETE, &gNid);
+        }
         return 0;
     case WM_DESTROY:
+        SaveColorStats();
         KillTimer(h, TID_SAMPLE);
         Shell_NotifyIconW(NIM_DELETE, &gNid);
         if (gBal) DestroyWindow(gBal);
@@ -1244,6 +1296,8 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE prev, LPWSTR cmd, int show)
     EnableProfilePrivilege();
     IniPath();
     LoadSettings();
+    RrStatsInit(&gCol, gS.riseMB);
+    LoadColorStats();
 
     if (gDumpPath) {
         int r = Dump(gDumpPath);
@@ -1261,14 +1315,14 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE prev, LPWSTR cmd, int show)
     wc.lpszClassName = L"RamRiseBalloonMain";
     RegisterClassExW(&wc);
     wc.lpfnWndProc = BalProc;
-    wc.hCursor = LoadCursorW(NULL, (LPCWSTR)IDC_HAND);
+    wc.hCursor = LoadCursorW(NULL, (LPCWSTR)IDC_ARROW);
     wc.lpszClassName = L"RamRiseBalloonPopup";
     RegisterClassExW(&wc);
 
     /* 隠しトップレベル (メッセージ専用ではない: TaskbarCreated / WM_DISPLAYCHANGE などのブロードキャストを受けるため) */
     gMain = CreateWindowExW(WS_EX_TOOLWINDOW, L"RamRiseBalloonMain", APP_TITLE, WS_POPUP,
                             0, 0, 0, 0, NULL, NULL, inst, NULL);
-    gBal = CreateWindowExW(WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_LAYERED,
+    gBal = CreateWindowExW(WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_LAYERED | WS_EX_TRANSPARENT,
                            L"RamRiseBalloonPopup", APP_TITLE, WS_POPUP, 0, 0, 1, 1, NULL, NULL, inst, NULL);
     if (!gMain || !gBal) return 1;
 

@@ -3,14 +3,15 @@
  * (shared by the app and tests). No Windows headers.
  * Combined usage counts compressed pages at uncompressed size without
  * double-counting the store's physical footprint. Colour ladders start
- * from fixed defaults and, after enough in-memory samples, follow
- * quantiles of the values actually seen this run (nothing is saved).
+ * from fixed defaults and, after enough samples, follow quantiles of
+ * the values actually seen (fixed-bin histograms, saved to the ini
+ * only when the app exits).
  */
 #ifndef RAMRISE_JUDGE_H
 #define RAMRISE_JUDGE_H
 
 #include <math.h>
-#include <stdlib.h>
+#include <stdio.h>
 #include <string.h>
 
 #ifndef RR_MB
@@ -91,10 +92,12 @@ static void RrJudgeWindow(int hist_count, int win_samples,
  *   <50 white, 50 green, 60 yellow, 70 orange, 80 red, 85 magenta, 90+ purple.
  *
  * After RR_STAT_WARM samples of a kind, thresholds move toward quantiles of
- * the in-memory ring so the same ladder covers the range actually seen.
- * Updates are eased (RR_STAT_ALPHA) so colours do not jump. A tight range
- * (almost no variation) keeps the defaults, so a flat line does not flicker.
- * Nothing is written to disk.
+ * a fixed-bin histogram so the same ladder covers the range actually seen.
+ * Diff magnitudes use 64 log-spaced bins (0.5–4096 MB); usage % uses 101
+ * one-point bins (0–100). Updates are eased (RR_STAT_ALPHA). A tight range
+ * keeps the defaults. When a histogram's total exceeds RR_HIST_DECAY_CAP,
+ * all bins are halved so recent samples weigh more. The app may persist the
+ * three count lists as compact ini lines on exit only.
  */
 #define RR_RGB(r, g, b) ((unsigned)(((r) << 16) | ((g) << 8) | (b)))
 #define RR_COL_WHITE      RR_RGB(0xEC, 0xEE, 0xF1)
@@ -103,32 +106,41 @@ static void RrJudgeWindow(int hist_count, int win_samples,
 #define RR_COL_ORANGE     RR_RGB(0xFF, 0x9A, 0x20)
 #define RR_COL_RED        RR_RGB(0xFF, 0x3A, 0x3A)
 #define RR_COL_MAGENTA    RR_RGB(0xFF, 0x4A, 0xE6)
-#define RR_COL_PURPLE     RR_RGB(0xC4, 0x5C, 0xFF)
+#define RR_COL_PURPLE     RR_RGB(0xC8, 0x00, 0xFF)
 #define RR_COL_CYAN       RR_RGB(0xB0, 0xF2, 0xFF)
 #define RR_COL_BLUE_LIGHT RR_RGB(0x6A, 0xB4, 0xFF)
 #define RR_COL_BLUE       RR_RGB(0x4A, 0x7C, 0xFF)
 #define RR_COL_BLUE_DEEP  RR_RGB(0x6A, 0x66, 0xFF)
 
 #define RR_DELTA_EPS_MB  0.5
+#define RR_DIFF_HIST_MAX_MB  4096.0
 enum {
-    RR_STAT_CAP   = 1024,
-    RR_STAT_WARM  = 60,
-    RR_PLUS_N     = 5,
-    RR_MINUS_N    = 3,
-    RR_PCT_N      = 6
+    RR_HIST_DIFF_BINS = 64,
+    RR_HIST_PCT_BINS  = 101,
+    RR_HIST_DECAY_CAP = 2048,
+    RR_STAT_WARM      = 60,
+    RR_PLUS_N         = 5,
+    RR_MINUS_N        = 3,
+    RR_PCT_N          = 6
 };
 #define RR_STAT_ALPHA 0.15
 
 typedef struct {
-    float v[RR_STAT_CAP];
-    int n, head;
-} RrRing;
+    unsigned c[RR_HIST_DIFF_BINS];
+    unsigned total;
+} RrDiffHist;
 
 typedef struct {
-    RrRing plus, minus, pct;
-    double plus_thr[RR_PLUS_N];    /* bytes: Y, O, R, M, P */
-    double minus_thr[RR_MINUS_N];  /* bytes: light, blue, deep */
-    double pct_thr[RR_PCT_N];      /* %: G, Y, O, R, M, P */
+    unsigned c[RR_HIST_PCT_BINS];
+    unsigned total;
+} RrPctHist;
+
+typedef struct {
+    RrDiffHist plus, minus;
+    RrPctHist  pct;
+    double plus_thr[RR_PLUS_N];
+    double minus_thr[RR_MINUS_N];
+    double pct_thr[RR_PCT_N];
     int inited;
 } RrColorStats;
 
@@ -154,35 +166,137 @@ static void RrStatsInit(RrColorStats *s, int rise_mb)
     s->inited = 1;
 }
 
-static void RrRingPush(RrRing *r, float x)
+static void RrHistDecay(unsigned *c, int bins, unsigned *total)
 {
-    r->v[r->head] = x;
-    r->head = (r->head + 1) % RR_STAT_CAP;
-    if (r->n < RR_STAT_CAP) r->n++;
-}
-
-static int RrCmpFloat(const void *a, const void *b)
-{
-    float x = *(const float *)a, y = *(const float *)b;
-    return (x > y) - (x < y);
-}
-
-/* q in 0..1. tmp must hold at least r->n floats. */
-static double RrRingQuantile(const RrRing *r, double q, float *tmp)
-{
-    int n = r->n, lo;
-    double pos, f;
     int i;
-    if (n <= 0) return 0;
-    for (i = 0; i < n; i++) tmp[i] = r->v[i];
-    qsort(tmp, (size_t)n, sizeof(float), RrCmpFloat);
-    if (n == 1 || q <= 0) return tmp[0];
-    if (q >= 1) return tmp[n - 1];
-    pos = q * (double)(n - 1);
-    lo = (int)pos;
-    f = pos - (double)lo;
-    if (lo >= n - 1) return tmp[n - 1];
-    return (double)tmp[lo] * (1.0 - f) + (double)tmp[lo + 1] * f;
+    unsigned s = 0;
+    if (*total <= RR_HIST_DECAY_CAP) return;
+    for (i = 0; i < bins; i++) { c[i] /= 2; s += c[i]; }
+    *total = s;
+}
+
+static void RrHistAdd(unsigned *c, int bins, unsigned *total, int bin)
+{
+    if (bin < 0) bin = 0;
+    if (bin >= bins) bin = bins - 1;
+    c[bin]++;
+    (*total)++;
+    RrHistDecay(c, bins, total);
+}
+
+/* Log-spaced bins over [0.5 MB, 4096 MB]. Edge 0 = 0.5 MB, edge N = 4096 MB. */
+static double RrDiffBinEdge(int i)
+{
+    double lo = log(RR_DELTA_EPS_MB), hi = log(RR_DIFF_HIST_MAX_MB);
+    if (i <= 0) return RR_DELTA_EPS_MB * RR_MB;
+    if (i >= RR_HIST_DIFF_BINS) return RR_DIFF_HIST_MAX_MB * RR_MB;
+    return exp(lo + (double)i / (double)RR_HIST_DIFF_BINS * (hi - lo)) * RR_MB;
+}
+
+static int RrDiffBin(double bytes)
+{
+    double mb = bytes / RR_MB, lo, hi, t;
+    int i;
+    if (mb <= RR_DELTA_EPS_MB) return 0;
+    lo = log(RR_DELTA_EPS_MB);
+    hi = log(RR_DIFF_HIST_MAX_MB);
+    t = (log(mb) - lo) / (hi - lo);
+    i = (int)(t * RR_HIST_DIFF_BINS);
+    if (i < 0) return 0;
+    if (i >= RR_HIST_DIFF_BINS) return RR_HIST_DIFF_BINS - 1;
+    return i;
+}
+
+static int RrPctBin(double pct)
+{
+    int i = (int)(pct + 0.5);
+    if (i < 0) return 0;
+    if (i > RR_HIST_PCT_BINS - 1) return RR_HIST_PCT_BINS - 1;
+    return i;
+}
+
+static void RrHistAddDiff(RrDiffHist *h, double bytes)
+{
+    RrHistAdd(h->c, RR_HIST_DIFF_BINS, &h->total, RrDiffBin(bytes));
+}
+
+static void RrHistAddPct(RrPctHist *h, double pct)
+{
+    RrHistAdd(h->c, RR_HIST_PCT_BINS, &h->total, RrPctBin(pct));
+}
+
+/* q in 0..1. lo(i) / hi(i) are the edges of bin i, in the histogram's units. */
+static double RrHistQuantile(const unsigned *c, int bins, unsigned total, double q,
+                             double (*edge)(int))
+{
+    double want, acc = 0, prev, f, a, b;
+    int i;
+    if (total == 0) return edge(0);
+    if (q <= 0) return edge(0);
+    if (q >= 1) return edge(bins);
+    want = q * (double)total;
+    for (i = 0; i < bins; i++) {
+        acc += (double)c[i];
+        if (acc >= want) {
+            prev = acc - (double)c[i];
+            f = (c[i] > 0) ? (want - prev) / (double)c[i] : 1.0;
+            a = edge(i);
+            b = edge(i + 1);
+            return a + f * (b - a);
+        }
+    }
+    return edge(bins);
+}
+
+static double RrDiffEdge(int i) { return RrDiffBinEdge(i); }
+static double RrPctEdge(int i)
+{
+    if (i <= 0) return 0;
+    if (i >= RR_HIST_PCT_BINS) return (double)(RR_HIST_PCT_BINS - 1);
+    return (double)i;
+}
+
+static int RrHistParse(const char *s, unsigned *c, int bins)
+{
+    int i;
+    if (!s || !c || bins <= 0) return 0;
+    memset(c, 0, (size_t)bins * sizeof *c);
+    for (i = 0; i < bins; i++) {
+        unsigned long v = 0;
+        if (i) {
+            if (*s != ',') return 0;
+            s++;
+        }
+        if (*s < '0' || *s > '9') return 0;
+        while (*s >= '0' && *s <= '9') {
+            v = v * 10ul + (unsigned long)(*s - '0');
+            if (v > 0xfffffffful) return 0;
+            s++;
+        }
+        c[i] = (unsigned)v;
+    }
+    return *s == 0;
+}
+
+static unsigned RrHistSum(const unsigned *c, int bins)
+{
+    int i;
+    unsigned s = 0;
+    for (i = 0; i < bins; i++) s += c[i];
+    return s;
+}
+
+static int RrHistFormat(const unsigned *c, int bins, char *out, int cap)
+{
+    int i, n = 0;
+    if (!out || cap < 2) return 0;
+    out[0] = 0;
+    for (i = 0; i < bins; i++) {
+        int w = snprintf(out + n, (size_t)(cap - n), i ? ",%u" : "%u", c[i]);
+        if (w < 0 || w >= cap - n) { out[0] = 0; return 0; }
+        n += w;
+    }
+    return 1;
 }
 
 static void RrFinishThr(double *t, int n, double min_gap, double floor_v)
@@ -201,7 +315,6 @@ static void RrLerpThr(double *a, const double *t, int n, double alpha)
 
 static void RrColorRecompute(RrColorStats *s, int rise_mb)
 {
-    float tmp[RR_STAT_CAP];
     double def_p[RR_PLUS_N], def_m[RR_MINUS_N], def_c[RR_PCT_N];
     double tgt_p[RR_PLUS_N], tgt_m[RR_MINUS_N], tgt_c[RR_PCT_N];
     static const double q_plus[RR_PLUS_N]   = { 0.20, 0.40, 0.60, 0.80, 0.95 };
@@ -212,8 +325,9 @@ static void RrColorRecompute(RrColorStats *s, int rise_mb)
     RrDeltaDefaultThr(rise_mb, def_p, def_m);
     RrPercentDefaultThr(def_c);
 
-    if (s->plus.n >= RR_STAT_WARM) {
-        for (i = 0; i < RR_PLUS_N; i++) tgt_p[i] = RrRingQuantile(&s->plus, q_plus[i], tmp);
+    if (s->plus.total >= RR_STAT_WARM) {
+        for (i = 0; i < RR_PLUS_N; i++)
+            tgt_p[i] = RrHistQuantile(s->plus.c, RR_HIST_DIFF_BINS, s->plus.total, q_plus[i], RrDiffEdge);
         if (tgt_p[RR_PLUS_N - 1] - tgt_p[0] < 4.0 * RR_MB)
             memcpy(tgt_p, def_p, sizeof tgt_p);
         else
@@ -222,8 +336,9 @@ static void RrColorRecompute(RrColorStats *s, int rise_mb)
         memcpy(tgt_p, def_p, sizeof tgt_p);
     }
 
-    if (s->minus.n >= RR_STAT_WARM) {
-        for (i = 0; i < RR_MINUS_N; i++) tgt_m[i] = RrRingQuantile(&s->minus, q_minus[i], tmp);
+    if (s->minus.total >= RR_STAT_WARM) {
+        for (i = 0; i < RR_MINUS_N; i++)
+            tgt_m[i] = RrHistQuantile(s->minus.c, RR_HIST_DIFF_BINS, s->minus.total, q_minus[i], RrDiffEdge);
         if (tgt_m[RR_MINUS_N - 1] - tgt_m[0] < 4.0 * RR_MB)
             memcpy(tgt_m, def_m, sizeof tgt_m);
         else
@@ -232,8 +347,9 @@ static void RrColorRecompute(RrColorStats *s, int rise_mb)
         memcpy(tgt_m, def_m, sizeof tgt_m);
     }
 
-    if (s->pct.n >= RR_STAT_WARM) {
-        for (i = 0; i < RR_PCT_N; i++) tgt_c[i] = RrRingQuantile(&s->pct, q_pct[i], tmp);
+    if (s->pct.total >= RR_STAT_WARM) {
+        for (i = 0; i < RR_PCT_N; i++)
+            tgt_c[i] = RrHistQuantile(s->pct.c, RR_HIST_PCT_BINS, s->pct.total, q_pct[i], RrPctEdge);
         if (tgt_c[RR_PCT_N - 1] - tgt_c[0] < 8.0)
             memcpy(tgt_c, def_c, sizeof tgt_c);
         else

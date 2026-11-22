@@ -195,7 +195,7 @@ int main(void)
         RrColorStats st;
         int i;
         RrStatsInit(&st, 50);
-        EQ(st.plus.n, 0);
+        EQ(st.plus.total, 0);
         APPROX(st.plus_thr[0] / RR_MB, 10.0, 1e-6);
         APPROX(st.plus_thr[4] / RR_MB, 150.0, 1e-6);
         APPROX(st.pct_thr[5], 90.0, 1e-6);
@@ -203,9 +203,9 @@ int main(void)
         EQ(RrPercentColor(50, st.pct_thr), RR_COL_GREEN);
         EQ(RrPercentColor(90, st.pct_thr), RR_COL_PURPLE);
         for (i = 0; i < RR_STAT_WARM - 1; i++)
-            RrRingPush(&st.plus, (float)((i + 1) * 5 * RR_MB));
+            RrHistAddDiff(&st.plus, (i + 1) * 5 * RR_MB);
         RrColorRecompute(&st, 50);
-        /* not yet warm */
+        EQ(st.plus.total, RR_STAT_WARM - 1);
         APPROX(st.plus_thr[4] / RR_MB, 150.0, 1e-6);
     }
 
@@ -217,11 +217,10 @@ int main(void)
         double before, after;
         RrStatsInit(&st, 50);
         for (i = 1; i <= 100; i++)
-            RrRingPush(&st.plus, (float)(i * RR_MB));   /* 1..100 MB, n=100 */
+            RrHistAddDiff(&st.plus, i * RR_MB);   /* 1..100 MB, n=100 */
         before = st.plus_thr[4];
         RrColorRecompute(&st, 50);
         after = st.plus_thr[4];
-        /* default 150 MB, target ~95 MB; one step of 15% toward 95 */
         if (!(after < before && after > 95 * RR_MB)) {
             fails++; n++;
             printf("FAIL %s:%d plus_thr[4] did not ease toward quantile (%.1f -> %.1f MB)\n",
@@ -230,11 +229,11 @@ int main(void)
             n++;
         }
         for (k = 0; k < 40; k++) RrColorRecompute(&st, 50);
-        APPROX(st.plus_thr[0] / RR_MB, 20.0, 3.0);   /* q20 of 1..100 */
-        APPROX(st.plus_thr[4] / RR_MB, 95.0, 3.0);   /* q95 */
+        APPROX(st.plus_thr[0] / RR_MB, 20.0, 8.0);   /* q20 of 1..100, log bins */
+        APPROX(st.plus_thr[4] / RR_MB, 95.0, 12.0);  /* q95, wider bins at the top */
         EQ(RrDeltaColor(0.4 * RR_MB, 50, st.plus_thr, st.minus_thr), RR_COL_WHITE);
         EQ(RrDeltaColor(15 * RR_MB, 50, st.plus_thr, st.minus_thr), RR_COL_GREEN);
-        EQ(RrDeltaColor(96 * RR_MB, 50, st.plus_thr, st.minus_thr), RR_COL_PURPLE);
+        EQ(RrDeltaColor(110 * RR_MB, 50, st.plus_thr, st.minus_thr), RR_COL_PURPLE);
     }
 
     /* Narrow plus range keeps the defaults (a flat line must not flicker). */
@@ -243,7 +242,7 @@ int main(void)
         int i, k;
         RrStatsInit(&st, 50);
         for (i = 0; i < 80; i++)
-            RrRingPush(&st.plus, (float)((10.0 + (i % 2) * 0.2) * RR_MB));
+            RrHistAddDiff(&st.plus, (10.0 + (i % 2) * 0.2) * RR_MB);
         for (k = 0; k < 40; k++) RrColorRecompute(&st, 50);
         APPROX(st.plus_thr[0] / RR_MB, 10.0, 1e-3);
         APPROX(st.plus_thr[4] / RR_MB, 150.0, 1e-3);
@@ -255,18 +254,71 @@ int main(void)
         int i, k;
         RrStatsInit(&st, 50);
         for (i = 0; i <= 80; i++)
-            RrRingPush(&st.pct, (float)(30.0 + i * 0.5));   /* 30..70, n=81 */
+            RrHistAddPct(&st.pct, 30.0 + i * 0.5);   /* 30..70, n=81 */
         for (i = 1; i <= 80; i++)
-            RrRingPush(&st.minus, (float)(i * RR_MB));      /* 1..80 MB */
+            RrHistAddDiff(&st.minus, i * RR_MB);     /* 1..80 MB */
         for (k = 0; k < 40; k++) RrColorRecompute(&st, 50);
-        APPROX(st.pct_thr[0], 34.0, 3.0);    /* q10 of 30..70 */
-        APPROX(st.pct_thr[5], 68.0, 3.0);    /* q95 */
+        APPROX(st.pct_thr[0], 34.0, 3.0);
+        APPROX(st.pct_thr[5], 68.0, 3.0);
         EQ(RrPercentColor(30, st.pct_thr), RR_COL_WHITE);
-        EQ(RrPercentColor(69, st.pct_thr), RR_COL_PURPLE);
-        APPROX(st.minus_thr[0] / RR_MB, 20.0, 5.0);  /* q25 of 1..80 */
-        APPROX(st.minus_thr[2] / RR_MB, 72.0, 5.0);  /* q90 */
+        EQ(RrPercentColor(72, st.pct_thr), RR_COL_PURPLE);
+        APPROX(st.minus_thr[0] / RR_MB, 20.0, 8.0);
+        APPROX(st.minus_thr[2] / RR_MB, 72.0, 12.0);
         EQ(RrDeltaColor(-2 * RR_MB, 50, st.plus_thr, st.minus_thr), RR_COL_CYAN);
-        EQ(RrDeltaColor(-75 * RR_MB, 50, st.plus_thr, st.minus_thr), RR_COL_BLUE_DEEP);
+        EQ(RrDeltaColor(-90 * RR_MB, 50, st.plus_thr, st.minus_thr), RR_COL_BLUE_DEEP);
+    }
+
+    /* Histogram decay, format, and parse (including malformed lines). */
+    {
+        unsigned c[RR_HIST_DIFF_BINS], d[RR_HIST_DIFF_BINS];
+        unsigned total = 0;
+        char buf[2048];
+        int i;
+        memset(c, 0, sizeof c);
+        for (i = 0; i < RR_HIST_DECAY_CAP + 10; i++)
+            RrHistAdd(c, RR_HIST_DIFF_BINS, &total, 3);
+        /* After crossing the cap, counts were halved once, then 9 more adds
+           (the add that crossed the cap also triggered the half). */
+        if (!(total < RR_HIST_DECAY_CAP && total > RR_HIST_DECAY_CAP / 4)) {
+            fails++; n++;
+            printf("FAIL %s:%d decay total=%u\n", __FILE__, __LINE__, total);
+        } else {
+            n++;
+        }
+        EQ(RrHistSum(c, RR_HIST_DIFF_BINS), (long long)total);
+        EQ(RrHistFormat(c, RR_HIST_DIFF_BINS, buf, (int)sizeof buf), 1);
+        EQ(RrHistParse(buf, d, RR_HIST_DIFF_BINS), 1);
+        EQ(RrHistSum(d, RR_HIST_DIFF_BINS), (long long)total);
+        EQ(d[3], c[3]);
+        EQ(RrHistParse("", d, RR_HIST_DIFF_BINS), 0);
+        EQ(RrHistParse("1,2,3", d, RR_HIST_DIFF_BINS), 0);
+        EQ(RrHistParse("x,1,2", d, 3), 0);
+        EQ(RrHistParse("1,2,3,", d, 3), 0);
+        EQ(RrHistParse("1,2,3,4", d, 3), 0);
+        EQ(RrHistParse("1,2,3", d, 3), 1);
+        EQ(d[0], 1); EQ(d[1], 2); EQ(d[2], 3);
+    }
+
+    /* Loaded warm histogram snaps thresholds on inited=0 recompute. */
+    {
+        RrColorStats st;
+        int i;
+        char buf[2048];
+        unsigned tmp[RR_HIST_PCT_BINS];
+        RrStatsInit(&st, 50);
+        for (i = 30; i <= 70; i++) {
+            int k;
+            for (k = 0; k < 3; k++) RrHistAddPct(&st.pct, (double)i);
+        }
+        EQ(RrHistFormat(st.pct.c, RR_HIST_PCT_BINS, buf, (int)sizeof buf), 1);
+        RrStatsInit(&st, 50);
+        EQ(RrHistParse(buf, tmp, RR_HIST_PCT_BINS), 1);
+        memcpy(st.pct.c, tmp, sizeof tmp);
+        st.pct.total = RrHistSum(st.pct.c, RR_HIST_PCT_BINS);
+        st.inited = 0;
+        RrColorRecompute(&st, 50);
+        APPROX(st.pct_thr[0], 34.0, 4.0);
+        APPROX(st.pct_thr[5], 68.0, 4.0);
     }
 
     if (fails) {
