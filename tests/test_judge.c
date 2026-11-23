@@ -321,6 +321,36 @@ int main(void)
         APPROX(st.pct_thr[5], 68.0, 4.0);
     }
 
+    /* Idle exclusion: tiny steps are recorded only for RR_STAT_IDLE_MS,
+       then skipped until a significant change resets the clock. */
+    {
+        int idle = 0, i, last = 0;
+        EQ(RrStatSignificant(RR_STAT_ACTIVE_MB * RR_MB, 0), 1);
+        EQ(RrStatSignificant((RR_STAT_ACTIVE_MB - 0.1) * RR_MB, 0), 0);
+        EQ(RrStatSignificant(0, RR_STAT_ACTIVE_PCT), 1);
+        EQ(RrStatSignificant(0, RR_STAT_ACTIVE_PCT - 0.1), 0);
+        EQ(RrStatSignificant(1.0 * RR_MB, 0.5), 0);
+        EQ(RrStatShouldAdd(1, 1000, &idle), 1);
+        EQ(idle, 0);
+        for (i = 0; i < 180; i++)
+            last = RrStatShouldAdd(0, 1000, &idle);
+        EQ(last, 1);                      /* 180th second is still taken */
+        EQ(idle, RR_STAT_IDLE_MS);
+        EQ(RrStatShouldAdd(0, 1000, &idle), 0);
+        EQ(RrStatShouldAdd(0, 1000, &idle), 0);
+        EQ(idle, RR_STAT_IDLE_MS);
+        EQ(RrStatShouldAdd(1, 1000, &idle), 1);   /* significant: resume */
+        EQ(idle, 0);
+        EQ(RrStatShouldAdd(0, 1000, &idle), 1);
+        EQ(idle, 1000);
+        idle = 0;
+        for (i = 0; i < 720; i++)
+            last = RrStatShouldAdd(0, 250, &idle);
+        EQ(last, 1);
+        EQ(idle, RR_STAT_IDLE_MS);
+        EQ(RrStatShouldAdd(0, 250, &idle), 0);
+    }
+
     if (fails) {
         printf("%d failed / %d checks\n", fails, n);
         return 1;

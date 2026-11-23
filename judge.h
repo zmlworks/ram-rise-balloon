@@ -96,8 +96,11 @@ static void RrJudgeWindow(int hist_count, int win_samples,
  * Diff magnitudes use 64 log-spaced bins (0.5–4096 MB); usage % uses 101
  * one-point bins (0–100). Updates are eased (RR_STAT_ALPHA). A tight range
  * keeps the defaults. When a histogram's total exceeds RR_HIST_DECAY_CAP,
- * all bins are halved so recent samples weigh more. The app may persist the
- * three count lists as compact ini lines on exit only.
+ * all bins are halved so recent samples weigh more. Samples are not added
+ * after RR_STAT_IDLE_MS without a significant change (|combined step|
+ * >= RR_STAT_ACTIVE_MB, or |combined %| move >= RR_STAT_ACTIVE_PCT);
+ * a later significant sample is added and the idle clock resets. The app
+ * may persist the three count lists as compact ini lines on exit only.
  */
 #define RR_RGB(r, g, b) ((unsigned)(((r) << 16) | ((g) << 8) | (b)))
 #define RR_COL_WHITE      RR_RGB(0xEC, 0xEE, 0xF1)
@@ -124,6 +127,9 @@ enum {
     RR_PCT_N          = 6
 };
 #define RR_STAT_ALPHA 0.15
+#define RR_STAT_ACTIVE_MB   4.0     /* |diff| at or above this is significant */
+#define RR_STAT_ACTIVE_PCT  1.0     /* |%| move at or above this is significant */
+#define RR_STAT_IDLE_MS     180000  /* stop adding after this long with no significant change */
 
 typedef struct {
     unsigned c[RR_HIST_DIFF_BINS];
@@ -164,6 +170,31 @@ static void RrStatsInit(RrColorStats *s, int rise_mb)
     RrDeltaDefaultThr(rise_mb, s->plus_thr, s->minus_thr);
     RrPercentDefaultThr(s->pct_thr);
     s->inited = 1;
+}
+
+/* Significant: |combined step| >= 4 MB, or combined usage moved by >= 1 point. */
+static int RrStatSignificant(double abs_diff_bytes, double abs_dpct)
+{
+    return (abs_diff_bytes >= RR_STAT_ACTIVE_MB * RR_MB)
+        || (abs_dpct >= RR_STAT_ACTIVE_PCT);
+}
+
+/* Accept this sample into the histograms? A significant change resets the
+   idle clock. Otherwise the sample is taken only until idle_ms has already
+   reached RR_STAT_IDLE_MS; idle_ms is then advanced by sample_ms (capped). */
+static int RrStatShouldAdd(int significant, int sample_ms, int *idle_ms)
+{
+    if (!idle_ms) return 1;
+    if (sample_ms < 0) sample_ms = 0;
+    if (*idle_ms < 0) *idle_ms = 0;
+    if (significant) {
+        *idle_ms = 0;
+        return 1;
+    }
+    if (*idle_ms >= RR_STAT_IDLE_MS) return 0;
+    *idle_ms += sample_ms;
+    if (*idle_ms > RR_STAT_IDLE_MS) *idle_ms = RR_STAT_IDLE_MS;
+    return 1;
 }
 
 static void RrHistDecay(unsigned *c, int bins, unsigned *total)

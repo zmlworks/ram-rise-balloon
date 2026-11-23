@@ -1,5 +1,5 @@
 /*
- * RamRiseBalloon (ram-rise-balloon) v0.3.3
+ * RamRiseBalloon (ram-rise-balloon) v0.3.4
  * RAM 使用量（圧縮分を足した合計）が増えている間、または急に減ったときに、
  * 画面右下に使用量のバルーンを出す常駐アプリ (Windows 10/11 x64)。
  * メモリ圧縮 (Memory Compression) の量も監視し、圧縮が増えているときもバルーンを出す。
@@ -22,7 +22,7 @@
 
 #define APP_NAME     L"RamRiseBalloon"
 #define APP_TITLE    L"RAM 上昇バルーン"
-#define APP_VER      L"0.3.3"
+#define APP_VER      L"0.3.4"
 #define INI_NAME     L"RamRiseBalloon.ini"
 #define MUTEX_NAME   L"Local\\zmlworks.RamRiseBalloon"
 #define RUN_KEY      L"Software\\Microsoft\\Windows\\CurrentVersion\\Run"
@@ -510,6 +510,7 @@ static int gCombRise, gCombDrop;     /* 2 行目 (含圧縮) の▲/▼、バル
 static int gCompRise;
 static double gDeltaUsed, gDeltaComb, gDeltaComp;
 static int gQuiet;          /* 増減していないサンプルが続いた数 */
+static int gStatIdleMs;     /* 意味のある変動が無いあいだの経過（色統計用） */
 static int gHold;           /* HoldSec をサンプル数にしたもの */
 static int gPeek;           /* 手動表示の残りサンプル数 */
 static int gShown;          /* 表示中 (フェードアウト中は 0) */
@@ -1000,15 +1001,24 @@ static void OnSample(void)
         double combTot = SampleCombinedTotal(s);
         double usedPct = s->total > 0 ? s->used * 100.0 / s->total : 0;
         double combPct = combTot > 0 ? comb * 100.0 / combTot : 0;
-        if (gHistCount > 1) {
-            double step = comb - prevComb;
-            if (step >= RR_DELTA_EPS_MB * MB) RrHistAddDiff(&gCol.plus, step);
-            else if (step <= -RR_DELTA_EPS_MB * MB) RrHistAddDiff(&gCol.minus, -step);
-        }
-        RrHistAddPct(&gCol.pct, usedPct);
-        RrHistAddPct(&gCol.pct, combPct);
-        RrColorRecompute(&gCol, gS.riseMB);
         pct = combPct;
+        {
+            double prevTot = SampleCombinedTotal(prev);
+            double prevPct = (gHistCount > 1 && prevTot > 0) ? prevComb * 100.0 / prevTot : combPct;
+            double step = (gHistCount > 1) ? (comb - prevComb) : 0;
+            double ad = step < 0 ? -step : step;
+            double ap = combPct - prevPct;
+            if (ap < 0) ap = -ap;
+            if (RrStatShouldAdd(RrStatSignificant(ad, ap), gS.sampleMs, &gStatIdleMs)) {
+                if (gHistCount > 1) {
+                    if (step >= RR_DELTA_EPS_MB * MB) RrHistAddDiff(&gCol.plus, step);
+                    else if (step <= -RR_DELTA_EPS_MB * MB) RrHistAddDiff(&gCol.minus, -step);
+                }
+                RrHistAddPct(&gCol.pct, usedPct);
+                RrHistAddPct(&gCol.pct, combPct);
+                RrColorRecompute(&gCol, gS.riseMB);
+            }
+        }
     }
 
     /* 判定は含圧縮の合計。使用中の行の▲/▼だけ、使用中そのものの増減で色を付ける */
@@ -1157,7 +1167,7 @@ static int Dump(const wchar_t *path)
     FILE *f = _wfopen(path, L"wb");
     int i;
     if (!f) return 2;
-    fprintf(f, "RamRiseBalloon 0.3.3 --dump\r\n");
+    fprintf(f, "RamRiseBalloon 0.3.4 --dump\r\n");
     for (i = 0; i < 3; i++) {
         Sample s;
         ProcSnap snap = {0, 0, 0};
@@ -1226,7 +1236,7 @@ static LRESULT CALLBACK MainProc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
         case ID_PAUSE:
             gPaused = !gPaused;
             if (gPaused) { gPeek = 0; HideBalloon(); }
-            else { gHistCount = 0; gHistPos = 0; gQuiet = 0; }
+            else { gHistCount = 0; gHistPos = 0; gQuiet = 0; gStatIdleMs = 0; }
             RestartSampling();
             UpdateTray();
             break;
